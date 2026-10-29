@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Attic</title>
+  <meta name="description" content="Attic — home file server interface, Phase 1A prototype on mock data.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <!-- Manrope if online; the system font stack takes over offline. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&display=swap">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div id="app" aria-live="off"></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <noscript><p style="padding:24px">Attic needs JavaScript to run.</p></noscript>
+
+  <!-- Plain scripts (not modules) so the app opens straight from disk with file://. -->
+  <script src="js/util.js"></script>
+  <script src="js/mockgen.js"></script>
+  <script src="js/idb.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/device.js"></script>
+  <script src="js/views/background.js"></script>
+  <script src="js/views/login.js"></script>
+  <script src="js/views/shell.js"></script>
+  <script src="js/views/files.js"></script>
+  <script src="js/views/media.js"></script>
+  <script src="js/views/dashboard.js"></script>
+  <script src="js/views/settings.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
