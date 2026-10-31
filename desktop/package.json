@@ -1,0 +1,46 @@
+{
+  "name": "attic-hub",
+  "productName": "Attic Hub",
+  "version": "0.2.0",
+  "description": "Attic Hub desktop tool: home file server interface and device hub.",
+  "author": "Sanketh Hegde",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "icons": "electron scripts/make-icons.js",
+    "pack": "electron-builder --win dir",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.sankethhegde.attichub",
+    "productName": "Attic Hub",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      { "from": "../ui", "to": "ui", "filter": ["**/*"] }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Attic Hub",
+      "artifactName": "Attic-Hub-Setup-${version}.${ext}"
+    }
+  }
+}

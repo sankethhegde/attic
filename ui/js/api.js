@@ -9,7 +9,7 @@
   const U = root.Attic.util;
   const idb = root.Attic.idb;
 
-  const K = { accounts: 'fs.accounts', session: 'fs.session', settings: 'fs.settings', shares: 'fs.shares', index: 'fs.mockIndex' };
+  const K = { accounts: 'fs.accounts', session: 'fs.session', settings: 'fs.settings', shares: 'fs.shares', index: 'fs.mockIndex', hub: 'fs.mockHub' };
   const DAY = 864e5;
   const MAX_CUSTOM_BG = 10, MAX_BG_BYTES = 5e6;
   const BG_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -239,6 +239,43 @@
     return c;
   }
 
+  // ---------- hub mock storage ----------
+  function hubData() {
+    let hub = read(K.hub, null);
+    if (!hub) { hub = root.Attic.mock.generateHub({ accounts: accounts() }); saveHub(hub); }
+    return hub;
+  }
+  function saveHub(hub) { write(K.hub, hub); }
+
+  // Smooth, believable movement: a few slow sine waves per device, so each poll differs a little.
+  function liveStats(d, t) {
+    const s = U.hash(d.id) % 1000, w = (p, a) => Math.sin(t / p + s) * a;
+    const b = d.base;
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    return {
+      cpu: Math.round(clamp(b.cpu + w(7000, 9) + w(2300, 5), 1, 99)),
+      ramTotal: b.ramTotal,
+      ramUsed: Math.round(clamp(b.ramUsed + w(11000, b.ramTotal * 0.04), 0, b.ramTotal)),
+      diskTotal: b.diskTotal,
+      diskFree: b.diskFree,
+      battery: b.battery,
+      charging: !!b.charging
+    };
+  }
+
+  // Active transfers progress from their start time and speed; finished ones are written back once.
+  function advanceTransfers(hub) {
+    const t = Date.now();
+    let changed = false;
+    for (const x of hub.transfers) {
+      if (x.status !== 'active') continue;
+      x.bytesDone = Math.min(x.size, Math.round((t - Date.parse(x.startedAt)) / 1000 * x.speed));
+      if (x.bytesDone >= x.size) { x.status = 'done'; x.finishedAt = new Date(Date.parse(x.startedAt) + x.size / x.speed * 1000).toISOString(); changed = true; }
+    }
+    if (changed) saveHub(hub);
+    return hub;
+  }
+
   function matchQuery(name, q) { return !q || name.toLowerCase().includes(q.toLowerCase()); }
 
   // =====================================================================
@@ -269,7 +306,7 @@
       ].map(d => Object.assign({ id: uid('acc_'), type: 'device', password_PLAINTEXT_MOCK_ONLY: 'test1234' }, d));
       saveAccounts([master, ...devices]);
       // The index is generated lazily on first read, with these accounts as owners.
-      try { localStorage.removeItem(K.index); } catch (e) { /* ignore */ }
+      try { localStorage.removeItem(K.index); localStorage.removeItem(K.hub); } catch (e) { /* ignore */ }
       cache = null;
       return publicAccount(master);
     },
@@ -571,6 +608,58 @@
         byShare: list.map(s => Object.assign({ id: s.id, name: s.name, available: s.available }, byShare[s.id] || { size: 0, count: 0 })).filter(s => s.count),
         byExt: Object.entries(byExt).map(([ext, v]) => Object.assign({ ext }, v)).sort((a, b) => b.size - a.size)
       };
+    },
+
+    // ---------- hub: devices and transfers (mock until Phase 2) ----------
+    // Every signed-in account sees which devices exist and whether they're online; only the master sees
+    // their system stats. In Phase 2 these become WebSocket updates from each device's agent.
+    async listHubDevices() {
+      await delay(true);
+      const session = sessionOrThrow();
+      const hub = hubData();
+      const t = Date.now();
+      return hub.devices.map(d => {
+        const out = { id: d.id, name: d.name, role: d.role, os: d.os, kind: d.kind, connection: d.connection, ip: d.ip,
+          online: d.online, lastSeenAt: d.online ? new Date(t).toISOString() : d.lastSeenAt, thisPC: !!d.thisPC, browserOnly: !!d.browserOnly, stats: null };
+        if (session.type === 'master' && d.base && d.online) out.stats = liveStats(d, t);
+        return out;
+      });
+    },
+
+    // The master sees every transfer; anyone else only their own.
+    async listTransfers() {
+      await delay(true);
+      const session = sessionOrThrow();
+      const hub = advanceTransfers(hubData());
+      return hub.transfers.filter(x => session.type === 'master' || x.userId === session.accountId)
+        .map(x => Object.assign({}, x)).sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    },
+
+    async retryTransfer(id) {
+      await delay(true);
+      const session = sessionOrThrow();
+      const hub = hubData();
+      const x = hub.transfers.find(t => t.id === id && (session.type === 'master' || t.userId === session.accountId));
+      if (!x) throw new ApiError('NOT_FOUND', 'That transfer no longer exists.');
+      if (x.status !== 'failed' && x.status !== 'cancelled') throw new ApiError('INVALID', 'Only failed or cancelled transfers can be retried.');
+      const to = hub.devices.find(d => d.id === x.to), from = hub.devices.find(d => d.id === x.from);
+      const waiting = !(to && to.online && from && from.online);
+      Object.assign(x, { status: waiting ? 'queued' : 'active', startedAt: new Date().toISOString(), finishedAt: null, bytesDone: 0, error: null,
+        speed: waiting ? null : x.speed || 20e6 });
+      saveHub(hub);
+      return Object.assign({}, x);
+    },
+
+    async cancelTransfer(id) {
+      await delay(true);
+      const session = sessionOrThrow();
+      const hub = advanceTransfers(hubData());
+      const x = hub.transfers.find(t => t.id === id && (session.type === 'master' || t.userId === session.accountId));
+      if (!x) throw new ApiError('NOT_FOUND', 'That transfer no longer exists.');
+      if (x.status !== 'active' && x.status !== 'queued') throw new ApiError('INVALID', 'Only active or queued transfers can be cancelled.');
+      Object.assign(x, { status: 'cancelled', finishedAt: new Date().toISOString() });
+      saveHub(hub);
+      return Object.assign({}, x);
     },
 
     // ---------- upload (simulated: nothing is stored) ----------

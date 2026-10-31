@@ -5,7 +5,8 @@
   const { api, ui } = A;
   const app = document.getElementById('app');
 
-  const VIEWS = { dashboard: A.dashboard, files: A.files, photos: A.media, videos: A.media, other: A.media, settings: A.settings };
+  const VIEWS = { dashboard: A.dashboard, files: A.files, photos: A.media, videos: A.media, other: A.media, settings: A.settings,
+    devices: A.devices, transfers: A.transfers };
 
   // Per-tab conveniences (scroll, sort, folder); per browser, not synced between devices.
   const freshTabs = (view) => ({
@@ -47,13 +48,13 @@
     if (state.needsSetup) {
       if (seg !== 'setup') return replace('#/setup');
       leaveShell();
-      document.title = 'Set up · Attic';
+      document.title = 'Set up · Attic Hub';
       return A.login.renderSetup(app, (opts) => { state.needsSetup = false; loginOpts = opts; A.background.engine.unmount(); go('#/login'); });
     }
     if (!state.session) {
       if (seg !== 'login') return replace('#/login');
       leaveShell();
-      document.title = 'Sign in · Attic';
+      document.title = 'Sign in · Attic Hub';
       const opts = loginOpts; loginOpts = null;
       return A.login.renderLogin(app, (res) => {
         A.background.engine.unmount();
@@ -76,7 +77,8 @@
     prevKey = r.key;
 
     shellApi.setTab(seg === 'settings' ? null : seg);
-    document.title = ({ dashboard: 'Dashboard', files: 'Files', photos: 'Photos', videos: 'Videos', other: 'Other', settings: 'Settings' }[seg]) + ' · Attic';
+    document.title = ({ dashboard: 'Dashboard', files: 'Files', photos: 'Photos', videos: 'Videos', other: 'Other', settings: 'Settings',
+      devices: 'Devices', transfers: 'Transfers' }[seg]) + ' · Attic Hub';
     ctx = {
       main, route: r, state, shell: shellApi, shellApi, go, signOut,
       reset: () => { location.hash = '#/setup'; location.reload(); },

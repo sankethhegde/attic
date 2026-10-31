@@ -3,7 +3,8 @@
   'use strict';
   const { util: U, api, ui, background } = root.Attic;
 
-  const VERSION = '0.1.0 · Phase 1A';
+  const VERSION = '0.2.0 · Phase 1B';
+  const HUB_REQUIREMENTS_URL = 'https://claude.ai/artifact/PAvQYsCeT2cKm1oApbtzJv';
   const REQUIREMENTS_URL = 'https://claude.ai/artifact/VryAcjg2CZieJSu6gUu3tJ';
 
   function seg(name, options, current, label) {
@@ -71,8 +72,11 @@
       <section class="card" aria-labelledby="h-about">
         <h2 id="h-about">About</h2>
         <div class="set-row"><div class="lbl">Version</div><div class="ctl mono">${VERSION}</div></div>
-        <div class="set-row" style="display:block"><div class="banner banner-info" style="margin:0">${U.icon('info')}<span>This is Phase 1A, running entirely in this browser on mock data. No real files are read, stored or uploaded, and the sign-in is <b>not secure</b>. <span id="ix"></span></span></div></div>
-        <div class="set-row"><div class="lbl">Requirements</div><div class="ctl"><a href="${REQUIREMENTS_URL}" target="_blank" rel="noopener">Phase 1A requirements ${U.icon('chevronRight').replace('class="ic"', 'class="ic" style="width:14px;height:14px;vertical-align:-2px"')}</a></div></div>
+        <div class="set-row"><div class="lbl">Running in</div><div class="ctl">${root.atticDesktop ? `Attic Hub desktop tool${root.atticDesktop.version ? ` <span class="mono">${U.esc(root.atticDesktop.version)}</span>` : ''}` : 'A web browser'}</div></div>
+        <div class="set-row" style="display:block"><div class="banner banner-info" style="margin:0">${U.icon('info')}<span>This is Phase 1B, still on mock data. No real files are read, stored or uploaded, devices and transfers are simulated, and the sign-in is <b>not secure</b>. <span id="ix"></span></span></div></div>
+        <div class="set-row"><div class="lbl">Requirements</div><div class="ctl" style="flex-direction:column;align-items:flex-end;gap:4px">
+          <a href="${HUB_REQUIREMENTS_URL}" target="_blank" rel="noopener">Attic Hub requirements ${U.icon('chevronRight').replace('class="ic"', 'class="ic" style="width:14px;height:14px;vertical-align:-2px"')}</a>
+          <a href="${REQUIREMENTS_URL}" target="_blank" rel="noopener">Phase 1A requirements ${U.icon('chevronRight').replace('class="ic"', 'class="ic" style="width:14px;height:14px;vertical-align:-2px"')}</a></div></div>
       </section>
     </div></div>`;
 

@@ -5,7 +5,7 @@
   'use strict';
   const { util: U, api, ui } = root.Attic;
 
-  const LABEL = { phone: 'Mobile phone', tablet: 'Tablet', laptop: 'Laptop', desktop: 'Desktop computer' };
+  const LABEL = { phone: 'Mobile phone', tablet: 'Tablet', laptop: 'Laptop', desktop: 'Desktop computer', handheld: 'Handheld PC' };
 
   // Small illustrations: neutral body, accent screen.
   const ART = {
@@ -27,6 +27,13 @@
       <path d="M24 35h8l2 7H22z" fill="var(--dev-body)" stroke="var(--dev-line)" stroke-width="1.5" stroke-linejoin="round"/>
       <rect x="16" y="42" width="24" height="3" rx="1.5" fill="var(--dev-line)"/>`
   };
+  // A handheld gaming PC (the ROG Ally): wide body, screen in the middle, sticks and buttons either side.
+  ART.handheld = `<rect x="2.5" y="12" width="51" height="24" rx="9" fill="var(--dev-body)" stroke="var(--dev-line)" stroke-width="1.5"/>
+      <rect x="15" y="15" width="26" height="18" rx="2" fill="var(--accent)"/>
+      <path d="M15 29l6-5 4 3.5 4-3 12 7.5H15z" fill="var(--accent-ink)" opacity=".55"/><circle cx="20" cy="19.5" r="1.8" fill="var(--accent-ink)" opacity=".7"/>
+      <circle cx="9" cy="20" r="2.6" fill="var(--dev-line)"/><circle cx="47" cy="28" r="2.6" fill="var(--dev-line)"/>
+      <circle cx="45.5" cy="19" r="1.2" fill="var(--dev-line)"/><circle cx="48.5" cy="21.5" r="1.2" fill="var(--dev-line)"/>
+      <path d="M7 28.5h4M9 26.5v4" stroke="var(--dev-line)" stroke-width="1.6" stroke-linecap="round"/>`;
   const art = (type, size) => `<svg class="dev-art" width="${size || 48}" height="${size || 48}" viewBox="0 0 56 48" aria-hidden="true">${ART[type] || ART.desktop}</svg>`;
 
   // ---------- detection ----------

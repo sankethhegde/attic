@@ -33,6 +33,7 @@
       <div class="refresh"><span id="checked" aria-live="polite"></span><button class="btn btn-secondary btn-sm" id="refresh">${U.icon('refresh')}Refresh</button></div></div>
       <div id="banners"></div>
       <div class="dash">
+        <section class="card" id="hub-strip" aria-labelledby="hs-h"><div class="skel" style="height:56px"></div></section>
         <section class="card" id="summary" aria-labelledby="sum-h"><div class="skel" style="height:120px"></div></section>
         <section class="card" id="per-share" aria-labelledby="ps-h"><div class="skel" style="height:140px"></div></section>
         <section class="card" id="by-type" aria-labelledby="bt-h"><div class="skel" style="height:160px"></div></section>
@@ -276,7 +277,22 @@
       r.innerHTML = rowHTML(q);
     }
 
+    // Device summary strip: who's online and what's moving, linking to the full views.
+    async function loadHubStrip() {
+      const el = main.querySelector('#hub-strip');
+      let devs, trs;
+      try { [devs, trs] = await Promise.all([api.listHubDevices(), api.listTransfers()]); }
+      catch (e) { el.innerHTML = ui.errorState(e, 'retry-hub'); el.querySelector('#retry-hub').onclick = loadHubStrip; return; }
+      const D = root.Attic.device;
+      const sending = trs.filter(x => x.status === 'active').length, waiting = trs.filter(x => x.status === 'queued').length, failed = trs.filter(x => x.status === 'failed').length;
+      el.innerHTML = `<div class="card-head"><h2 id="hs-h">Devices</h2><span class="tag">${devs.filter(d => d.online).length} of ${devs.length} online</span><span class="grow"></span>
+          <a class="btn btn-ghost btn-sm" href="#/transfers">${U.icon('transfer')}${[sending && `${sending} sending`, waiting && `${waiting} waiting`, failed && `${failed} failed`].filter(Boolean).join(' · ') || 'Transfers'}</a></div>
+        <div class="dev-strip">${devs.map(d => `<a class="dev-chip" href="#/devices" title="${U.esc(d.name)}: ${d.online ? 'online' : 'offline'}">${D.art(d.kind, 28)}
+          <span>${U.esc(d.name)}</span><span class="dot ${d.online ? 'on' : ''}" aria-label="${d.online ? 'online' : 'offline'}"></span></a>`).join('')}</div>`;
+    }
+
     main.querySelector('#refresh').onclick = refresh;
+    loadHubStrip();
     ctx.cleanup = hideTip;
     const s = await loadStorage();
     drawUpload(s);
