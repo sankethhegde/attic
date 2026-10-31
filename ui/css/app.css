@@ -102,6 +102,7 @@ h1, h2, h3 { margin: 0; }
   height: 40px; padding: 0 16px; border-radius: var(--r-md); border: 1.5px solid transparent;
   font-weight: 700; font-size: 14.5px; cursor: pointer; white-space: nowrap; position: relative;
   transition: background .15s, border-color .15s, color .15s, transform .1s;
+  text-decoration: none; /* a link styled as a button (Download) */
 }
 .btn:active:not(:disabled) { transform: scale(0.98); }
 .btn:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--focus-ring); }

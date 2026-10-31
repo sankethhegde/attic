@@ -1,16 +1,15 @@
 // api.js — the ONLY module that touches storage. No screen reads localStorage or calls fetch.
-// Phase 1A: reads browser storage with a 100–300ms delay. Phase 1B: these bodies become HTTP calls.
 // Every function returns a promise and every one can fail.
 //
-// MOCK AUTHENTICATION — NOT SECURE. Everything here is readable and editable from dev tools.
-// Phase 1B deletes the auth code below and rewrites it server-side. Do not port it.
+// Phase 1C: accounts, passwords and sessions are the HP server's (milestone 3), and so are the share
+// figures (milestone 1). Files, devices, transfers and ownership are still the browser mock, reading the
+// signed-in session and the account list the server returned.
 (function (root) {
   'use strict';
   const U = root.Attic.util;
   const idb = root.Attic.idb;
 
-  const K = { accounts: 'fs.accounts', session: 'fs.session', settings: 'fs.settings', shares: 'fs.shares', index: 'fs.mockIndex', hub: 'fs.mockHub' };
-  const DAY = 864e5;
+  const K = { settings: 'fs.settings', shares: 'fs.shares', index: 'fs.mockIndex', hub: 'fs.mockHub' };
   const MAX_CUSTOM_BG = 10, MAX_BG_BYTES = 5e6;
   const BG_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
@@ -35,6 +34,34 @@
 
   class ApiError extends Error {
     constructor(code, message) { super(message); this.code = code; }
+  }
+
+  // ---------- server ----------
+  // The session lives in an HttpOnly cookie this code never sees. `me` is what the server last said about
+  // it; `known` is the account list the mock reads for owners and devices (all accounts for the master,
+  // just your own for a device).
+  let me = null, known = [];
+
+  async function http(method, url, body) {
+    const opts = { method, credentials: 'same-origin', headers: {} };
+    if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+    const res = await fetch(url, opts).catch(() => null);
+    if (!res) throw new ApiError('UNREACHABLE', 'Could not reach the server.');
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      if (res.status === 401 && url !== '/api/session') { me = null; known = []; }
+      throw new ApiError((data && data.code) || 'SERVER', (data && data.message) || 'Something went wrong on the server.');
+    }
+    return data;
+  }
+
+  async function adopt(who) {
+    me = who || null;
+    known = !me ? [] : me.session.type === 'master' ? await http('GET', '/api/accounts') : [me.account];
+    return me;
+  }
+  async function refreshAccounts() {
+    if (me && me.session.type === 'master') known = await http('GET', '/api/accounts');
   }
 
   // ---------- storage primitives (private) ----------
@@ -137,18 +164,18 @@
     indexVersion++;
   }
 
-  // Accounts and ownership change together or not at all.
-  function commitWithAccounts(session, nextAccounts, nextEntries) {
-    const before = accounts();
-    saveAccounts(nextAccounts);
-    try { commit(session, nextEntries); }
-    catch (e) { saveAccounts(before); throw e; }
+  // Accounts (on the server) and ownership (in the mock index) change together or not at all: the index
+  // is written first, and put back if the server refuses the account change.
+  async function commitWithServer(session, nextEntries, serverCall) {
+    const before = rawIndex().entries;
+    commit(session, nextEntries);
+    try { return await serverCall(); }
+    catch (e) { commit(session, before); throw e; }
   }
 
   function sessionOrThrow() {
-    const s = currentSession();
-    if (!s) throw new ApiError('SIGNED_OUT', 'Your session has ended. Sign in again.');
-    return s;
+    if (!me) throw new ApiError('SIGNED_OUT', 'Your session has ended. Sign in again.');
+    return me.session;
   }
   function requireMaster(session) {
     if (!session || session.type !== 'master') throw new ApiError('FORBIDDEN', 'Only the master account can do that.');
@@ -159,32 +186,11 @@
     if (!s) { s = root.Attic.mock.defaultShares(); write(K.shares, s); }
     return s;
   }
-  function shareOrThrow(id) {
-    const s = shares().find(x => x.id === id);
-    if (!s) throw new ApiError('NOT_FOUND', 'That share no longer exists.');
-    if (!s.available) throw new ApiError('UNAVAILABLE', `${s.name} is unavailable. Check the drive is connected.`);
-    return s;
-  }
 
-  // ---------- session helpers ----------
-  function accounts() { return read(K.accounts, []); }
-  function saveAccounts(a) { write(K.accounts, a); }
-  function publicAccount(a) {
-    if (!a) return null;
-    const { password_PLAINTEXT_MOCK_ONLY, ...rest } = a;
-    return rest;
-  }
-  function currentSession() {
-    const s = read(K.session, null) || read(K.session, null, sessionStorage);
-    if (!s) return null;
-    if (s.expiresAt && Date.parse(s.expiresAt) < Date.now()) { clearSession(); return null; }
-    const acc = accounts().find(a => a.id === s.accountId);
-    if (!acc || acc.status !== 'active') { clearSession(); return null; }
-    return s;
-  }
-  function clearSession() {
-    try { localStorage.removeItem(K.session); sessionStorage.removeItem(K.session); } catch (e) { /* ignore */ }
-  }
+  // ---------- accounts, as the server last reported them ----------
+  function accounts() { return known; }
+  const copy = a => a && Object.assign({}, a);
+  const plus = (a, b) => ({ count: a.count + b.count, bytes: a.bytes + b.bytes });
 
   // ---------- aggregation (kept unchanged for real data in Phase 1B) ----------
   function aggregate(entries, shareList) {
@@ -286,91 +292,56 @@
 
     // ---------- first run ----------
     async needsSetup() {
-      await delay(false);
-      return !accounts().some(a => a.type === 'master');
+      return (await http('GET', '/api/setup')).needsSetup;
     },
 
+    // The server creates the master. The mock index and hub are regenerated on first read, owned by
+    // whichever accounts exist then.
     async createMaster({ displayName, username, password }) {
-      await delay(false);
-      if (accounts().some(a => a.type === 'master')) throw new ApiError('EXISTS', 'A master account already exists.');
-      const t = now();
-      const master = { id: 'acc_master', type: 'master', displayName, username: username.trim(), password_PLAINTEXT_MOCK_ONLY: password,
-        deviceType: 'desktop', createdAt: t, lastSeenAt: null, status: 'active' };
-      // Seed a few device accounts so the device list has something to show. Placeholder passwords only.
-      const ago = d => new Date(Date.now() - d * DAY).toISOString();
-      const devices = [
-        { displayName: 'Pixel 8', username: 'phone', deviceType: 'phone', createdAt: ago(40), lastSeenAt: ago(0.1), status: 'active' },
-        { displayName: 'Work laptop', username: 'worklaptop', deviceType: 'laptop', createdAt: ago(38), lastSeenAt: ago(2), status: 'active' },
-        { displayName: 'Galaxy Tab', username: 'tablet', deviceType: 'tablet', createdAt: ago(25), lastSeenAt: ago(9), status: 'active' },
-        { displayName: 'Old phone', username: 'oldphone', deviceType: 'phone', createdAt: ago(300), lastSeenAt: ago(120), status: 'revoked' }
-      ].map(d => Object.assign({ id: uid('acc_'), type: 'device', password_PLAINTEXT_MOCK_ONLY: 'test1234' }, d));
-      saveAccounts([master, ...devices]);
-      // The index is generated lazily on first read, with these accounts as owners.
+      const master = await http('POST', '/api/setup', { displayName, username, password });
       try { localStorage.removeItem(K.index); localStorage.removeItem(K.hub); } catch (e) { /* ignore */ }
       cache = null;
-      return publicAccount(master);
+      return master;
     },
 
-    // ---------- session (MOCK — authenticates nobody) ----------
+    // ---------- session (checked by the server) ----------
     async signIn({ mode, username, password, stay, deviceType }) {
-      await delay(false);
-      const u = (username || '').trim().toLowerCase();
-      const list = accounts();
-      const acc = list.find(a => a.username.toLowerCase() === u && a.type === (mode === 'master' ? 'master' : 'device'));
-      // One generic message: never reveal which half was wrong.
-      if (!acc || acc.password_PLAINTEXT_MOCK_ONLY !== password) throw new ApiError('BAD_CREDENTIALS', 'Incorrect username or password');
-      if (acc.status !== 'active') throw new ApiError('REVOKED', 'This device’s access has been revoked. Ask the master account to restore it.');
-      acc.lastSeenAt = now();
-      if (deviceType) acc.lastDeviceType = deviceType;
-      saveAccounts(list);
-      const t = Date.now();
-      const session = { accountId: acc.id, type: acc.type, deviceType: deviceType || null, createdAt: new Date(t).toISOString(), persistent: !!stay,
-        expiresAt: stay ? new Date(t + 30 * DAY).toISOString() : null };
-      clearSession();
-      write(K.session, session, stay ? localStorage : sessionStorage);
-      return { session, account: publicAccount(acc) };
-    },
-
-    // MOCK ONLY: lists accounts on the login screen so testers can find them. Delete in Phase 1B —
-    // a real server never tells an unauthenticated visitor which usernames exist.
-    async listTestAccounts() {
-      await delay(false);
-      return accounts().map(a => ({ type: a.type, username: a.username, displayName: a.displayName, deviceType: a.deviceType, status: a.status,
-        placeholderPassword: a.type === 'device' && a.password_PLAINTEXT_MOCK_ONLY === 'test1234' }));
+      const res = await http('POST', '/api/session', { mode, username, password, stay: !!stay, deviceType: deviceType || null });
+      await adopt(res);
+      return res;
     },
 
     async getSession() {
-      await delay(false);
-      const s = currentSession();
-      if (!s) return null;
-      return { session: s, account: publicAccount(accounts().find(a => a.id === s.accountId)) };
+      return adopt(await http('GET', '/api/session'));
     },
 
     async signOut() {
-      await delay(false);
-      clearSession();
+      try { await http('DELETE', '/api/session', {}); }
+      finally { me = null; known = []; }
     },
 
     // ---------- accounts ----------
     // Master only. Each device carries its totals, so the revoke dialog's figures are never the first time they appear.
     async listDevices() {
-      await delay(true);
       const session = sessionOrThrow();
       requireMaster(session);
+      await refreshAccounts();
       const totals = ownerTotals(visibleIndex(session));
-      return accounts().filter(a => a.type === 'device').map(a => Object.assign(publicAccount(a), { owned: totals.get(a.id) || { count: 0, bytes: 0 } }))
+      return accounts().filter(a => a.type === 'device').map(a => Object.assign(copy(a), { owned: totals.get(a.id) || { count: 0, bytes: 0 } }))
         .sort((a, b) => (a.status === b.status ? 0 : a.status === 'active' ? -1 : 1) || (b.lastSeenAt || '').localeCompare(a.lastSeenAt || ''));
     },
 
     // Master only: every account that can own files, for owner columns, filters and custodian pickers.
     async listOwners() {
-      await delay(true);
       const session = sessionOrThrow();
       requireMaster(session);
+      await refreshAccounts();
       return accounts().map(a => ({ id: a.id, displayName: a.displayName, username: a.username, type: a.type, deviceType: a.deviceType, status: a.status }));
     },
 
     // File count and bytes an account owns now, and what it uploaded that someone else holds in custody.
+    // Real files (the server's, milestone 5) plus the mock index still behind Photos, Videos and the
+    // Dashboard, until milestone 6 retires it.
     async ownershipSummary(accountId) {
       await delay(true);
       const session = sessionOrThrow();
@@ -381,7 +352,8 @@
         if (e.ownerId === accountId) { owned.count++; owned.bytes += e.size; }
         if (e.uploadedBy === accountId && e.ownerId !== accountId) { inCustody.count++; inCustody.bytes += e.size; }
       }
-      return { accountId, owned, inCustody };
+      const real = await http('GET', `/api/accounts/${encodeURIComponent(accountId)}/ownership`);
+      return { accountId, owned: plus(owned, real.owned), inCustody: plus(inCustody, real.inCustody) };
     },
 
     // Revoke: every file the account owns goes to the custodian; uploadedBy is untouched so restore can return it.
@@ -389,6 +361,7 @@
       await delay(true);
       const session = sessionOrThrow();
       requireMaster(session);
+      await refreshAccounts();
       const list = accounts();
       const acc = list.find(a => a.id === id && a.type === 'device');
       if (!acc) throw new ApiError('NOT_FOUND', 'That device no longer exists.');
@@ -399,9 +372,9 @@
         moved++; bytes += e.size;
         return Object.assign({}, e, { ownerId: custodian.id });
       });
-      acc.status = 'revoked';
-      commitWithAccounts(session, list, next);
-      return { account: publicAccount(acc), moved: { count: moved, bytes }, custodian: publicAccount(custodian) };
+      const r = await commitWithServer(session, next, () => http('POST', `/api/accounts/${encodeURIComponent(id)}/revoke`, { custodianId: custodian.id }));
+      await refreshAccounts();
+      return { account: r.account, moved: plus({ count: moved, bytes }, r.moved), custodian: copy(custodian) };
     },
 
     // Restore: files this account uploaded that someone else still holds come back. Cleared uploadedBy means
@@ -410,8 +383,8 @@
       await delay(true);
       const session = sessionOrThrow();
       requireMaster(session);
-      const list = accounts();
-      const acc = list.find(a => a.id === id && a.type === 'device');
+      await refreshAccounts();
+      const acc = accounts().find(a => a.id === id && a.type === 'device');
       if (!acc) throw new ApiError('NOT_FOUND', 'That device no longer exists.');
       let returned = 0, bytes = 0;
       const next = visibleIndex(session).map(e => {
@@ -419,9 +392,9 @@
         returned++; bytes += e.size;
         return Object.assign({}, e, { ownerId: id });
       });
-      acc.status = 'active';
-      commitWithAccounts(session, list, next);
-      return { account: publicAccount(acc), returned: { count: returned, bytes } };
+      const r = await commitWithServer(session, next, () => http('POST', `/api/accounts/${encodeURIComponent(id)}/restore`, {}));
+      await refreshAccounts();
+      return { account: r.account, returned: plus({ count: returned, bytes }, r.returned) };
     },
 
     // Kept for callers that only flip status; revoking always needs a custodian.
@@ -431,32 +404,30 @@
     },
 
     // Master only: end the uploader's claim on these files. The only change to uploadedBy besides removal.
+    // Real files ("r:" ids) are kept on the server; mock ones in the mock index.
     async reassignPermanently(fileIds) {
       await delay(true);
       const session = sessionOrThrow();
       requireMaster(session);
-      const ids = new Set(fileIds);
+      const realIds = fileIds.filter(id => String(id).startsWith('r:'));
+      const ids = new Set(fileIds.filter(id => !String(id).startsWith('r:')));
       let cleared = 0;
-      const next = visibleIndex(session).map(e => {
-        if (!ids.has(e.id) || e.uploadedBy == null || e.uploadedBy === e.ownerId) return e;
-        cleared++;
-        return Object.assign({}, e, { uploadedBy: null });
-      });
-      commit(session, next);
+      if (ids.size) {
+        const next = visibleIndex(session).map(e => {
+          if (!ids.has(e.id) || e.uploadedBy == null || e.uploadedBy === e.ownerId) return e;
+          cleared++;
+          return Object.assign({}, e, { uploadedBy: null });
+        });
+        commit(session, next);
+      }
+      if (realIds.length) cleared += (await http('POST', '/api/files/keep', { ids: realIds })).cleared;
       return { cleared };
     },
 
     async createDevice({ displayName, username, password, deviceType }) {
-      await delay(true);
-      const list = accounts();
-      const u = username.trim();
-      if (!/^[a-zA-Z0-9._-]{3,32}$/.test(u)) throw new ApiError('INVALID', 'Usernames are 3–32 letters, numbers, dots, dashes or underscores.');
-      if (list.some(a => a.username.toLowerCase() === u.toLowerCase())) throw new ApiError('TAKEN', 'That username is already taken. Try another.');
-      const acc = { id: uid('acc_'), type: 'device', displayName: displayName.trim(), username: u, password_PLAINTEXT_MOCK_ONLY: password,
-        deviceType, createdAt: now(), lastSeenAt: null, status: 'active' };
-      list.push(acc);
-      saveAccounts(list);
-      return publicAccount(acc);
+      const acc = await http('POST', '/api/accounts', { displayName, username, password, deviceType });
+      await refreshAccounts();
+      return acc;
     },
 
     // Remove: permanent. Owned files go to the custodian, and every uploadedBy pointing at this account is
@@ -465,6 +436,7 @@
       await delay(true);
       const session = sessionOrThrow();
       requireMaster(session);
+      await refreshAccounts();
       const list = accounts();
       const acc = list.find(a => a.id === id);
       if (!acc || acc.type === 'master') throw new ApiError('FORBIDDEN', 'The master account can’t be deleted.');
@@ -477,38 +449,30 @@
         if (e.uploadedBy === id) out.uploadedBy = null;
         return out;
       });
-      commitWithAccounts(session, list.filter(a => a.id !== id), next);
-      return { moved: { count: moved, bytes }, custodian: publicAccount(custodian) };
+      const r = await commitWithServer(session, next, () => http('POST', `/api/accounts/${encodeURIComponent(id)}/remove`, { custodianId: custodian.id }));
+      await refreshAccounts();
+      return { moved: plus({ count: moved, bytes }, r.moved), custodian: copy(custodian) };
     },
 
     async updateDisplayName(id, displayName) {
-      await delay(true);
-      const list = accounts();
-      const acc = list.find(a => a.id === id);
-      if (!acc) throw new ApiError('NOT_FOUND', 'Account not found.');
-      acc.displayName = displayName.trim();
-      saveAccounts(list);
-      return publicAccount(acc);
+      const acc = await http('PATCH', `/api/accounts/${encodeURIComponent(id)}`, { displayName });
+      if (me && me.account.id === id) me.account = acc;
+      known = known.map(a => a.id === id ? acc : a);
+      return acc;
     },
 
+    // Ends this account's other sessions; this one stays signed in.
     async changePassword(id, current, next) {
-      await delay(true);
-      const list = accounts();
-      const acc = list.find(a => a.id === id);
-      if (!acc || acc.password_PLAINTEXT_MOCK_ONLY !== current) throw new ApiError('BAD_CREDENTIALS', 'Your current password is incorrect.');
-      acc.password_PLAINTEXT_MOCK_ONLY = next;
-      saveAccounts(list);
+      await http('POST', `/api/accounts/${encodeURIComponent(id)}/password`, { current, next });
     },
 
     // ---------- shares ----------
-    // Figures come from the caller's visible files. A device gets no drive capacity or free space:
-    // those would reveal how much other accounts store.
+    // Phase 1C milestone 1: the first real endpoint. Real drive figures from the HP server; every other
+    // function here still reads mock data. Per-device scoping returns server-side with login (milestone 3).
     async listShares() {
-      await delay(true);
-      const session = sessionOrThrow();
-      const agg = aggregate(visibleIndex(session), shares());
-      if (session.type === 'master') return agg.shares;
-      return agg.shares.map(s => Object.assign({}, s, { total: null, free: null, scope: 'visible' }));
+      const res = await fetch('/api/shares').catch(() => null);
+      if (!res || !res.ok) throw new ApiError('UNREACHABLE', 'Could not reach the server.');
+      return res.json();
     },
 
     async saveShare(share) {
@@ -542,20 +506,34 @@
       write(K.shares, list);
     },
 
-    // ---------- files ----------
+    // ---------- files (real, from the HP: milestone 4) ----------
+    // The server sends what the disk knows; type and category are worked out here, exactly as the
+    // mock did, so every screen sees the same shape. Until milestone 5 every real file is the master's.
     async listFolder(shareId, path) {
-      await delay(true);
-      const share = shareOrThrow(shareId);
-      const ix = view(sessionOrThrow());
-      if (path && !ix.folders.has(shareId + '/' + path)) throw new ApiError('NOT_FOUND', 'This folder doesn’t exist any more.');
-      return { share: { id: share.id, name: share.name }, path, items: (ix.children.get(shareId + '/' + path) || []).slice() };
+      const q = path ? '?path=' + encodeURIComponent(path) : '';
+      const data = await http('GET', `/api/shares/${encodeURIComponent(shareId)}/folder${q}`);
+      data.items = data.items.map(e => Object.assign(e, e.kind === 'file' ? { ext: U.extOf(e.name), category: U.classify(e.name) } : { ext: '', category: null }));
+      return data;
     },
 
+    // A real id carries its share and path, so one folder listing finds it.
     async getFile(id) {
-      await delay(true);
-      const e = view(sessionOrThrow()).byId.get(id);
+      let shareId, rel;
+      try {
+        const bin = atob(String(id).replace(/^r:/, '').replace(/-/g, '+').replace(/_/g, '/'));
+        [shareId, rel] = new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0))).split('\n');
+      } catch (e) { /* not a real id */ }
+      if (!String(id).startsWith('r:') || rel === undefined) throw new ApiError('NOT_FOUND', 'File not found.');
+      const parent = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+      const e = (await api.listFolder(shareId, parent)).items.find(x => x.id === id);
       if (!e) throw new ApiError('NOT_FOUND', 'File not found.');
-      return Object.assign({}, e);
+      return e;
+    },
+
+    // Where the browser downloads a file from. A plain link: the browser streams it to disk itself,
+    // resumes with Range requests, and the session cookie goes along.
+    downloadUrl(e) {
+      return `/api/shares/${encodeURIComponent(e.share)}/file?path=${encodeURIComponent(U.joinPath(e.path, e.name))}`;
     },
 
     // Photos, Videos and Other are filtered views over the same index — not separate storage.
@@ -662,7 +640,7 @@
       return Object.assign({}, x);
     },
 
-    // ---------- upload (simulated: nothing is stored) ----------
+    // ---------- upload (real, to the HP: milestone 5) ----------
     validateUpload(file) {
       if (file.size === 0) return 'Empty file. Nothing to upload.';
       if (file.size > 20e9) return 'Too large. The limit is 20 GB per file.';
@@ -670,21 +648,28 @@
       return null;
     },
 
-    simulateUpload(file, onProgress) {
-      let done = 0, cancelled = false;
-      const total = file.size;
-      const speed = 25e6 + Math.random() * 60e6; // bytes per second, pretend
+    // Sends the file itself as the request body, so the browser streams it from disk. XMLHttpRequest
+    // rather than fetch: only it reports upload progress. The uploader owns the file; a name that's
+    // taken comes back as "name (1).ext". Resolves with the stored entry.
+    upload(shareId, folder, file, onProgress) {
+      const xhr = new XMLHttpRequest();
       return {
-        cancel() { cancelled = true; },
+        cancel() { xhr.abort(); },
         promise: new Promise((resolve, reject) => {
-          const tick = () => {
-            if (cancelled) return reject(new ApiError('CANCELLED', 'Cancelled'));
-            done = Math.min(total, done + speed * 0.2 + total * 0.04);
-            onProgress(done / total);
-            if (done >= total) resolve({ name: file.name, size: file.size, stored: false });
-            else setTimeout(tick, 200);
+          xhr.open('PUT', `/api/shares/${encodeURIComponent(shareId)}/file?path=${encodeURIComponent(U.joinPath(folder || '', file.name))}`);
+          xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+          xhr.setRequestHeader('X-Attic-Upload', '1');
+          xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+          xhr.onload = () => {
+            let data = null;
+            try { data = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
+            if (xhr.status === 201) { onProgress(1); return resolve(data); }
+            if (xhr.status === 401) { me = null; known = []; }
+            reject(new ApiError((data && data.code) || 'SERVER', (data && data.message) || 'The upload failed.'));
           };
-          setTimeout(tick, 200);
+          xhr.onerror = () => reject(new ApiError('UNREACHABLE', 'Could not reach the server.'));
+          xhr.onabort = () => reject(new ApiError('CANCELLED', 'Cancelled'));
+          xhr.send(file);
         })
       };
     },
@@ -750,8 +735,9 @@
       if (Array.isArray(data.shares)) write(K.shares, data.shares);
     },
 
+    // This browser's data only. Accounts live on the server and are untouched; you're signed out.
     async clearAllData() {
-      await delay(false);
+      await api.signOut().catch(() => {});
       for (const store of [localStorage, sessionStorage]) {
         Object.keys(store).filter(k => k.startsWith('fs.')).forEach(k => store.removeItem(k));
       }

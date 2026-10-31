@@ -73,7 +73,7 @@
       ${owners && inCustody(e) ? `<div class="banner banner-info" style="margin-bottom:12px">${U.icon('undo')}<span>Held in custody for <b>${U.esc(ownerLabel(e.uploadedBy, owners))}</b>. It goes back if that account is restored.</span></div>
         <button class="btn btn-secondary btn-block" id="keep-perm" style="margin-bottom:10px">${U.icon('lock')}Keep permanently</button>` : ''}
       <div class="panel-actions">
-        <span class="tip" data-tip="Downloads arrive in Phase 2" tabindex="0"><button class="btn btn-secondary" disabled>${U.icon('download')}Download</button></span>
+        <a class="btn btn-secondary" href="${U.esc(api.downloadUrl(e))}" download="${U.esc(e.name)}">${U.icon('download')}Download</a>
         <span class="tip" data-tip="Deleting arrives in Phase 2" tabindex="0"><button class="btn btn-secondary" disabled>${U.icon('trash')}Delete</button></span>
       </div></aside>`;
   }
@@ -126,6 +126,7 @@
         <div class="only-sm crumbs-sm" id="crumbs-sm" style="width:100%"></div>
         <h1 id="ftitle"></h1><span class="muted" id="fcount"></span><span class="grow"></span>
         <div class="toolbar">
+          <button class="btn btn-secondary btn-sm" id="fupload">${U.icon('upload')}<span>Upload</span></button><input type="file" id="fpick" multiple hidden>
           ${master ? '<label class="sr-only" for="fowner">Owner</label><select class="plain-select" id="fowner"><option value="">All owners</option></select>' : ''}
           <div class="seg" role="group" aria-label="View">
             <button data-view="list" aria-pressed="${ts.view === 'list'}">${U.icon('list')}<span>List</span></button>
@@ -174,6 +175,32 @@
     csm.innerHTML = crumbs;
     wireCrumbs(csm, share, path, ctx.go);
     main.querySelector('#ftitle').textContent = path ? path.split('/').pop() : share.name;
+
+    // Upload into this folder. The uploader owns what it uploads; progress shows on the button.
+    const upBtn = main.querySelector('#fupload'), pick = main.querySelector('#fpick');
+    upBtn.onclick = () => pick.click();
+    pick.onchange = async () => {
+      const list = [...pick.files];
+      pick.value = '';
+      const bad = list.map(f => [f, api.validateUpload(f)]).filter(([, err]) => err);
+      bad.forEach(([f, err]) => ui.toast(`${f.name}: ${err}`, 'error'));
+      const good = list.filter(f => !api.validateUpload(f));
+      if (!good.length) return;
+      const total = good.reduce((n, f) => n + f.size, 0), done = new Map();
+      const label = upBtn.querySelector('span');
+      upBtn.disabled = true;
+      const results = await Promise.allSettled(good.map(f => api.upload(shareId, path, f, p => {
+        done.set(f, p * f.size);
+        label.textContent = Math.floor([...done.values()].reduce((a, b) => a + b, 0) / total * 100) + '%';
+      }).promise));
+      upBtn.disabled = false;
+      label.textContent = 'Upload';
+      const ok = results.filter(r => r.status === 'fulfilled').length;
+      results.forEach((r, i) => { if (r.status === 'rejected') ui.toast(`${good[i].name}: ${r.reason.message}`, 'error'); });
+      if (ok) ui.toast(ok === 1 ? `${results.find(r => r.status === 'fulfilled').value.name} uploaded` : `${ok} files uploaded`);
+      try { data.items = (await api.listFolder(shareId, path)).items; const st = main.scrollTop; draw(); main.scrollTop = st; }
+      catch (e) { /* the list stays as it was */ }
+    };
 
     let selected = data.items.find(i => i.id === selectId) || null;
     let vl = null, items = [], gridCols = 1;

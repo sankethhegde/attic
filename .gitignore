@@ -1,2 +1,6 @@
 node_modules/
 dist/
+
+# Server: real paths on the HP and runtime state stay off GitHub
+server/config.json
+server/data/
