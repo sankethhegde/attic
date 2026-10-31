@@ -9,7 +9,9 @@
     { id: 'files', label: 'Files', icon: 'folder' },
     { id: 'photos', label: 'Photos', icon: 'photo' },
     { id: 'videos', label: 'Videos', icon: 'video' },
-    { id: 'other', label: 'Other', icon: 'doc' }
+    { id: 'other', label: 'Other', icon: 'doc' },
+    { id: 'devices', label: 'Devices', icon: 'device' },
+    { id: 'transfers', label: 'Transfers', icon: 'transfer' }
   ];
 
   function initials(name) {

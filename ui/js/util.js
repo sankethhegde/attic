@@ -155,7 +155,16 @@
     undo: '<path d="M9 14 4.5 9.5 9 5M4.5 9.5H15a5 5 0 0 1 0 10h-2"/>',
     dots: '<path d="M5.5 12h0M12 12h0M18.5 12h0"/>',
     database: '<ellipse cx="12" cy="6" rx="7.5" ry="2.5"/><path d="M4.5 6v12c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5V6M4.5 12c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5"/>',
-    monitor: '<rect x="3.5" y="4" width="17" height="11.5" rx="1.5"/><path d="M9 20h6M12 15.5V20"/>'
+    monitor: '<rect x="3.5" y="4" width="17" height="11.5" rx="1.5"/><path d="M9 20h6M12 15.5V20"/>',
+    clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+    arrowRight: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+    transfer: '<path d="M4 8h14M14.5 4.5 18 8l-3.5 3.5M20 16H6M9.5 12.5 6 16l3.5 3.5"/>',
+    wifi: '<path d="M3 9.5a13 13 0 0 1 18 0M6 13a8.5 8.5 0 0 1 12 0M9 16.5a4 4 0 0 1 6 0M12 20h0"/>',
+    ethernet: '<rect x="5" y="5" width="14" height="11" rx="1.5"/><path d="M9 16v3.5h6V16M9 9v2.5M12 9v2.5M15 9v2.5"/>',
+    cpu: '<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/>',
+    memory: '<rect x="3.5" y="7" width="17" height="10" rx="1.5"/><path d="M7 11v2M10.5 11v2M14 11v2M17.5 11v2M6 17v2.5M18 17v2.5"/>',
+    battery: '<rect x="3" y="7.5" width="16" height="9" rx="2"/><path d="M21 10.5v3"/>',
+    plug: '<path d="M9 3.5v4M15 3.5v4M6.5 7.5h11V11a5.5 5.5 0 0 1-11 0zM12 16.5v4"/>'
   };
   function icon(name, cls) {
     return `<svg class="ic${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${P[name] || P.file}</svg>`;

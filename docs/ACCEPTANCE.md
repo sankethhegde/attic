@@ -95,6 +95,18 @@ Run on 2026-10-21 against the checklist in the requirements doc. Most checks wer
 
 All-or-nothing was also tested: with storage forced to fail in the middle of a revoke, the index, the accounts and the device status all stayed unchanged.
 
+## Phase 1B: desktop tool (2026-10-31)
+
+| Check | Result | How it was verified |
+| --- | --- | --- |
+| The tool installs on the Acer and opens the Attic interface in its own window | ⏳ Needs you | Installer built (`Attic-Hub-Setup-0.2.0.exe`, 106 MB). The packaged app opens the interface in its own window; running the installer on the Acer is still to do. |
+| Every Phase 1A view works inside the tool as it did in the browser | ✅ | `scripts/smoke-test.mjs` against both the dev build and the packaged exe: setup, 10 views each render content, the session survives a reload, 0 console errors |
+| Devices and Transfers views show mock devices and transfers | ✅ | 4 devices (HP server, Acer, ROG Ally offline, iPhone status-only) with stats moving every 3 s; 17 transfers with live progress, a queued one, failures with Retry, and history |
+
+Also checked: 360px with no horizontal scrolling on Devices, Transfers, Dashboard, Files, Photos and Settings, in both themes; Manrope still loads when online.
+
+Fixed during 1B: the Google Fonts stylesheet blocked every script until it downloaded, so a fresh or offline start could freeze. It now loads without blocking. A hidden tooltip at the edge of the page widened it at 360px; tooltips now take no space until shown.
+
 ## Problems found and fixed during the run
 
 1. **Focus after navigation:** after opening a folder or tab, keyboard focus fell back to the top of the page, so you had to Tab through the header again. It now moves into the new content.
