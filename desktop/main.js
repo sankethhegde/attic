@@ -3,6 +3,8 @@
 // serves, so sign-in and every file call go to the real server. A typed address is the fallback.
 // Pairing (2-2) happens in that interface; the HP keeps this PC's device token in a cookie, which the
 // window's session stores across restarts.
+// Milestone 2-3: once paired, the agent (agent/hub-agent.js) reports this PC's stats to the HP's live hub
+// every few seconds, using that cookie's token.
 // Tray, notifications, Explorer integration and Server/Client mode arrive in later phases.
 const { app, BrowserWindow, Menu, shell, ipcMain } = require('electron');
 const path = require('path');
@@ -17,6 +19,10 @@ const OS_NAME = process.platform === 'win32' ? (Number(os.release().split('.')[2
 const ROOT = app.isPackaged ? __dirname : path.join(__dirname, '..');
 const CONNECT_PAGE = path.join(ROOT, 'ui', 'connect.html');
 const connect = require(path.join(ROOT, 'agent', 'connect.js'));
+const { createAgent, hubUrl } = require(path.join(ROOT, 'agent', 'hub-agent.js'));
+const { createCollector } = require(path.join(ROOT, 'agent', 'stats.js'));
+let si = null;
+try { si = require('systeminformation'); } catch (e) { /* battery unknown, network guessed by name */ }
 
 const HEARTBEAT_MS = 15e3; // how often an open session checks the HP is still there
 let win = null;
@@ -27,6 +33,10 @@ let choices = [];          // servers offered on a "choose" screen
 let searching = false;
 let heartbeat = 0;
 let saved = null;
+let agent = null;          // the live-stats agent for `server`, while this PC is paired with it
+let agentToken = null;
+let agentState = 'off';
+let collect = null;        // made once, so its CPU meter keeps measuring between reports
 
 // One window only: a second launch focuses the first.
 if (!app.requestSingleInstanceLock()) {
@@ -68,6 +78,7 @@ function showStartScreen() {
 async function startSearch({ mode = 'start', lost = null } = {}) {
   if (searching || !win) return;
   searching = true;
+  stopAgent();
   showStartScreen();
   const from = mode === 'change' ? null : remembered;
   sendState({ state: 'searching', step: from ? 'remembered' : 'broadcast', server: from, lost });
@@ -97,7 +108,30 @@ function useServer(s) {
     win.loadURL(connect.urlFor(s));
     clearInterval(heartbeat);
     heartbeat = setInterval(checkStillThere, HEARTBEAT_MS);
+    startAgent();
   }, 450);
+}
+
+// The agent runs while this PC is paired with the open server: its device token is the HttpOnly cookie
+// the HP set at pairing, which only the main process can read. The HP itself has no cookie and no agent;
+// it measures itself.
+async function startAgent() {
+  if (!server || !win) return stopAgent();
+  const s = server;
+  const [c] = await win.webContents.session.cookies.get({ url: connect.urlFor(s), name: 'attic_device' }).catch(() => []);
+  if (server !== s) return;
+  if (!c) return stopAgent();
+  if (agent && agentToken === c.value) return; // a sign-in renews the same cookie
+  stopAgent();
+  collect = collect || createCollector({ si });
+  agentToken = c.value;
+  agent = createAgent({ url: hubUrl(s), token: c.value, collect, onState: st => { agentState = st; } });
+}
+function stopAgent() {
+  if (agent) agent.stop();
+  agent = null;
+  agentToken = null;
+  agentState = 'off';
 }
 
 // While the interface is open, make sure the HP still answers; two misses in a row go back to searching.
@@ -136,7 +170,7 @@ ipcMain.on('hub:connectTo', async (e, text) => {
   catch (err) { sendState({ state: 'typed-error', message: err.message, address: String(text) }); }
 });
 ipcMain.handle('hub:current', e => trusted(e) && server
-  ? { name: server.name, address: server.address, port: server.port, serverId: server.serverId, url: connect.urlFor(server) } : null);
+  ? { name: server.name, address: server.address, port: server.port, serverId: server.serverId, url: connect.urlFor(server), agent: agentState } : null);
 ipcMain.on('hub:change', e => { if (trusted(e)) { server = null; startSearch({ mode: 'change' }); } });
 
 function createWindow() {
@@ -165,7 +199,13 @@ function createWindow() {
   // The HP's device cookie (2-2) is this PC's pairing. Write it to disk as soon as it arrives or changes,
   // so a crash or power cut straight after pairing doesn't lose it.
   const cookies = win.webContents.session.cookies;
-  cookies.on('changed', (_e, cookie) => { if (cookie.name === 'attic_device') cookies.flushStore().catch(() => {}); });
+  // Pairing also starts the live-stats agent (2-3), and unpairing stops it.
+  cookies.on('changed', (_e, cookie, _cause, removed) => {
+    if (cookie.name !== 'attic_device') return;
+    cookies.flushStore().catch(() => {});
+    if (removed) { if (cookie.value === agentToken) stopAgent(); }
+    else startAgent();
+  });
   win.loadFile(CONNECT_PAGE);
 
   // The window shows only the start screen and the confirmed server's pages. Anything else (the
@@ -188,7 +228,7 @@ function createWindow() {
     startSearch({ mode: 'lost', lost: { name: lost.name } });
   });
 
-  win.on('closed', () => { win = null; clearInterval(heartbeat); });
+  win.on('closed', () => { stopAgent(); win = null; clearInterval(heartbeat); });
 }
 
 app.on('window-all-closed', () => app.quit());

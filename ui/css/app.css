@@ -645,6 +645,14 @@ h1, h2, h3 { margin: 0; }
 .stat-top .v { margin-left: auto; color: var(--muted); }
 .dev-note { margin: 0; display: flex; gap: 8px; font-size: 13px; color: var(--muted); background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
 .dev-note .ic { width: 16px; height: 16px; flex: none; margin-top: 2px; }
+.stats.stale { opacity: .5; filter: grayscale(1); }
+.hub-status .conn-inline { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-weight: 500; }
+.hub-status .conn-inline .ic { width: 15px; height: 15px; }
+.dev-note .spinner { width: 14px; height: 14px; flex: none; margin-top: 2px; color: var(--accent); }
+.live-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; color: var(--muted); background: var(--surface-2); }
+.live-badge.on { color: var(--success); }
+.live-badge .dot { width: 7px; height: 7px; }
+.live-badge .spinner { width: 12px; height: 12px; }
 .hub-actions { margin-top: auto; display: flex; gap: 8px; }
 .hub-actions .tip { flex: 0 0 auto; }
 .hub-actions [data-unpair] { margin-left: auto; color: var(--danger); }

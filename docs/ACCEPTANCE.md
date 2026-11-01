@@ -162,6 +162,24 @@ Tests: `pairing-test.mjs` 19/19, `discovery-test.mjs` 13/13, `smoke-test.mjs` (1
 
 Still to do with the real machines: pair the Acer with the real HP (the master issues the code on the HP), then the ROG Ally.
 
+## Phase 2, milestone 2-3: live stats, the Acer's half (2 Nov 2026)
+
+The HP's half (the WebSocket hub, its own stats, who is online) was built and merged in pull request #8. This is the agent that reports a client PC's stats, and the Devices view going live.
+
+| Check | Result | How it was verified |
+| --- | --- | --- |
+| Stats on the Devices view update within 5 seconds of a change (Phase 2 check) | ✅ against a local server | A second device's report reached the master's Devices view in about 0.27 s, and a battery drop to 12% showed in red in the same time. Measured in the real tool against a throwaway server |
+| The agent collects CPU, RAM, disk, battery and network (D-04) | ✅ | The Acer's first report arrived 1 s after pairing: CPU 33%, RAM 10.2 of 16.7 GB, 380 GB free of 510, battery 76%, Wi-Fi, 192.168.1.5 |
+| The Devices view switches from mock to live (D-03) | ✅ | One WebSocket, a "Live" badge, and no `/api/devices` polling while it's connected. Cards change in place; a new device's card appears without a reload |
+| Offline devices | ✅ | When an agent stops, its card goes offline straight away, with the last figures greyed and "Last reported …" |
+| The HP's own card | ✅ | It shows its CPU, RAM and disk, and "No battery · mains", as measured by the HP itself |
+| Unpairing stops the agent | ✅ | The HP closes the agent's connection (4001), the agent stops, and the tool goes back to pairing |
+| Packaged app | ✅ | `live-stats-test.mjs` passes against `dist/win-unpacked/Attic Hub.exe`, so `systeminformation` is bundled |
+
+Tests: `live-stats-test.mjs` 17/17 (dev build and packaged), `pairing-test.mjs` 19/19, `discovery-test.mjs` 13/13, `smoke-test.mjs` (0 console errors), `node --test "agent/*.test.js"` 16/16 and `node --test "server/*.test.js"` 109/109.
+
+Still to do with the real machines: once the Acer is paired with the real HP, open Devices on the HP and watch the Acer's card. Then the ROG Ally, the second client from 2-3 on.
+
 ## Problems found and fixed during the run
 
 1. **Focus after navigation:** after opening a folder or tab, keyboard focus fell back to the top of the page, so you had to Tab through the header again. It now moves into the new content.

@@ -1,7 +1,7 @@
 {
   "name": "attic-hub",
   "productName": "Attic Hub",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Attic Hub desktop tool: home file server interface and device hub.",
   "author": "Sanketh Hegde",
   "private": true,
@@ -44,5 +44,8 @@
       "shortcutName": "Attic Hub",
       "artifactName": "Attic-Hub-Setup-${version}.${ext}"
     }
+  },
+  "dependencies": {
+    "systeminformation": "5.33.15"
   }
 }

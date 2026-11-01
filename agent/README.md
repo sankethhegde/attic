@@ -22,15 +22,24 @@ Tests: `node --test "agent/*.test.js"` (the logic, offline), and `desktop/script
 
 Pairing happens in the interface the HP serves, not here, so browsers and the iPhone get the same screen. The interface checks `GET /api/pairing` before setup or sign-in. If the device isn't paired, it shows "Pair this device", which sends the master's one-time code to `POST /api/pairing/claim`. The routes are in [server/README.md](../server/README.md#pairing-and-unpairing-phase-2-milestone-2-2-d-02-and-d-11).
 
-The device token arrives as an `HttpOnly` cookie in the window's session. The desktop tool writes it to disk as soon as it changes (`desktop/main.js`), so a crash straight after pairing doesn't lose it. In 2-3 the background part reads it from Electron's cookie store and sends it as `X-Attic-Device`.
+The device token arrives as an `HttpOnly` cookie in the window's session. The desktop tool writes it to disk as soon as it changes (`desktop/main.js`), so a crash straight after pairing doesn't lose it.
 
 Tests: `desktop/scripts/pairing-test.mjs`. It runs the real tool against a throwaway server with pairing required, reaching it through this PC's network address so the server treats the tool as a new device.
 
+## Live stats (milestone 2-3, D-03 and D-04) — built
+
+Once this PC is paired, the desktop tool's main process reads the device token from the `attic_device` cookie (only the main process can; the page never sees it) and starts the agent. Pairing starts it, unpairing stops it, and the tool restarts it when it moves to another server.
+
+- **`hub-agent.js`** opens `ws://<HP>:8080/api/hub?role=agent` with the token as `X-Attic-Device`, using the WebSocket built into Node and Electron. It waits for `{"type":"hello","interval":3000}`, then sends `{"type":"stats","stats":{…},"connection","ip"}` every `interval`. A dropped connection is retried after 1, 2, 4, 8, 15, then 30 s. Close code 4001 (unpaired) or 4000 (replaced by a newer agent) stops it for good.
+- **`stats.js`** collects the report. CPU (from the per-core counters), RAM and the system drive come from core Node on every report, because they're cheap. Battery and Wi-Fi or Ethernet come from `systeminformation` (5.33.15, a dependency of `desktop/`). On Windows it starts PowerShell and takes about a second, so those two are refreshed every 30 s in the background and reused in between.
+- **Settings → Server → Live stats** shows what the agent is doing: Sending to the HP, Reconnecting…, or Off.
+
+The Devices view opens the same hub without `role` (`api.openHub`). It gets the list first, then one device at a time as each reports, so the cards change in place. While that connection is down it shows "Reconnecting…" and polls `/api/devices` every 5 s. The server's side is in [server/README.md](../server/README.md#live-stats-phase-2-milestone-2-3-d-03-and-d-04).
+
+Tests: `node --test "agent/*.test.js"` (the agent's logic and the collector, offline), and `desktop/scripts/live-stats-test.mjs`. The second pairs the real tool with a throwaway server, checks its reports reach the HP, and plays a second device's agent to time a report reaching the master's screen.
+
 ## Still to come
 
-- **2-3 Live stats:** the `systeminformation` npm package, over a WebSocket to the HP.
 - **2-4 Hub Inbox:** receiving files sent from other devices.
 
-**The live hub is ready on the HP** (Phase 2, 2-3). The agent opens `ws://<HP>:8080/api/hub?role=agent` with the `X-Attic-Device` header and waits for `{"type":"hello","interval":3000}`. Then, every `interval` ms, it sends `{"type":"stats","stats":{cpu,ramTotal,ramUsed,diskTotal,diskFree,battery,charging},"connection","ip"}`. On a close it reconnects with a backoff; a close code of 4001 means the device was unpaired. The Devices view opens `/api/hub` without `role`, gets `{"type":"devices"}` and then `{"type":"device"}` changes. The details are in [server/README.md](../server/README.md#live-stats-phase-2-milestone-2-3-d-03-and-d-04).
-
-The Transfers view in `ui/` shows sample data from `ui/js/mockgen.js` until then. The agent has to produce the same shapes.
+The Transfers view in `ui/` shows sample data from `ui/js/mockgen.js` until then.
