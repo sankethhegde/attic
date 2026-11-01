@@ -19,7 +19,7 @@ test.before(async () => {
   fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({ host: '127.0.0.1',
     shares: [{ id: 'main', name: 'Main', rootPath: path.join(tmp, 'share') }, { id: 'gone', name: 'Gone', rootPath: path.join(tmp, 'missing') }] }));
   server = spawn(process.execPath, [path.join(__dirname, 'server.js')], {
-    env: Object.assign({}, process.env, { ATTIC_CONFIG: path.join(tmp, 'config.json'), ATTIC_DATA: path.join(tmp, 'data'), ATTIC_PORT: String(PORT) }),
+    env: Object.assign({}, process.env, { ATTIC_CONFIG: path.join(tmp, 'config.json'), ATTIC_DATA: path.join(tmp, 'data'), ATTIC_PORT: String(PORT), ATTIC_DISCOVERY_PORT: '0' }),
     stdio: ['ignore', 'pipe', 'inherit']
   });
   await new Promise((resolve, reject) => {

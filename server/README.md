@@ -4,6 +4,8 @@ The server that runs on the HP laptop. Built one milestone at a time from `docs/
 
 **Now: milestones 1–6, the whole brief.** Core Node only, no install step. It serves `ui/`, reports the real drives, owns accounts, passwords and sessions, browses, downloads and uploads real folders, enforces who owns what, and indexes every share for Photos, Videos, Other and the Dashboard. The browser's file mock is gone; only Devices and Transfers keep sample data, until Phase 2.
 
+**Phase 2 has begun on the server:** discovery (2-1) answers clients looking for the HP on the home network. Pairing, live stats and transfers follow.
+
 ## Run it
 
 ```
@@ -113,6 +115,37 @@ The last of the file mock is gone from `ui/`: Photos, Videos, Other, the Dashboa
 | `DELETE /api/shares/:id` | master | Stop serving it |
 
 `index.test.js` covers the index, previews and share editing, including a restart.
+
+## Discovery (Phase 2, milestone 2-1, D-01)
+
+Clients find the HP on the home network without anyone typing an address. `discovery.js` answers a UDP broadcast with where to reach the server. This is the HP's half of 2-1; the agent on the Acer, its "Looking for server" state and the typed-address fallback are the other half.
+
+The protocol, for the agent to implement (or reuse `findServers()` from `discovery.js`):
+
+| | Packet |
+| --- | --- |
+| Client broadcasts to UDP **41980** | `{"attic":"discover","v":1,"nonce":"<8–64 of A-Z a-z 0-9 _ ->"}`, at most 512 bytes |
+| HP answers that client only | `{"attic":"here","v":1,"nonce":<same>,"serverId":"<32 hex>","name":"<PC name>","address":"<HP's IP on the client's subnet>","port":8080}` |
+
+- **Home network only.** A request is answered only when the sender is on the same subnet as one of the HP's network interfaces, or is the HP itself. Anything else (malformed, oversized, another version, a sender asking more than 20 times in 10 seconds) gets silence, so the port tells a stranger nothing.
+- **The reply is small and says only where the server is**: no accounts, shares or files.
+- **`serverId`** is random, kept in `server/data/server-id.json`, and survives restarts and IP changes, so a client can recognise the same HP. `GET /api/hello` returns it too, so a client can confirm the address it found is the server it meant (pairing in 2-2 builds on this).
+- **Send to every broadcast address.** Windows sends `255.255.255.255` out of one interface only, so a client also sends to each subnet's own broadcast (`broadcastTargets()` lists them).
+- **If the UDP port is taken, the server still starts**, without discovery, and says so. Turn it off with `"discovery": { "enabled": false }` in `config.json`, or change `"port"`. The socket doesn't use address reuse, so another program can't share the port and intercept requests.
+
+Try it from any PC on the network, Node only:
+
+```
+node server/find-server.js
+```
+
+For other PCs to reach it, Windows Firewall on the HP must allow inbound UDP 41980 on the Private profile, alongside TCP 8080 (an Administrator PowerShell):
+
+```
+New-NetFirewallRule -DisplayName "Attic discovery (UDP 41980, Private)" -Direction Inbound -Protocol UDP -LocalPort 41980 -Action Allow -Profile Private
+```
+
+`discovery.test.js` covers the subnet rule, malformed packets, the rate limit, the id across a restart, and starting with the port taken.
 
 ## Rules that carry over
 
