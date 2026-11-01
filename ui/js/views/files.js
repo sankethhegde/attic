@@ -60,7 +60,7 @@
     const full = share.rootPath + '\\' + U.joinPath(e.path, e.name).replace(/\//g, '\\');
     return `<aside class="panel" aria-label="File details">
       <div class="panel-head"><h2>${U.esc(e.name)}</h2><button class="icon-btn" id="panel-close" aria-label="Close details">${U.icon('x')}</button></div>
-      <div class="preview" ${isPhoto ? `style="background-image:url('${ui.thumbFor(e.name)}')"` : ''}>${isPhoto ? '' : U.fileIcon(e)}</div>
+      <div class="preview" style="${ui.bgStyle(e)}">${isPhoto ? '' : U.fileIcon(e)}</div>
       <dl class="kv">
         <dt>Location</dt><dd class="mono">${U.esc(full)}</dd>
         <dt>Size</dt><dd><span class="mono">${U.formatBytes(e.size)}</span> <span class="muted">(${U.formatCount(e.size)} bytes)</span></dd>
@@ -288,7 +288,7 @@
           d.className = 'fgrid-row';
           d.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
           d.innerHTML = r.items.map(e => `<button class="ftile${selected && selected.id === e.id ? ' selected' : ''}" data-id="${e.id}" style="height:${h - 12}px">
-            <span class="thumb" ${e.category === 'photos' ? `style="background-image:url('${ui.thumbFor(e.name)}')"` : ''}>${e.category === 'photos' ? '' : U.fileIcon(e)}</span>
+            <span class="thumb" style="${ui.bgStyle(e)}">${e.category === 'photos' ? '' : U.fileIcon(e)}</span>
             <span class="nm nm-line">${U.nameHTML(e.name)}${master ? custodyBadge(e, owners) : ''}</span><span class="c">${e.kind === 'folder' ? 'Folder' : `<span class="mono">${U.formatBytes(e.size)}</span> · ${U.relDate(e.modifiedAt)}`}</span></button>`).join('');
           return d;
         }

@@ -129,9 +129,12 @@
     try { return await promise; } finally { clearTimeout(t); }
   };
 
-  ui.thumbFor = (name) => `assets/thumbs/photo-${(U.hash(name) % 8) + 1}.svg`;
-  ui.durationFor = (entry) => {
-    const secs = Math.max(8, Math.round(entry.size / 2.2e6)); // pretend ~17 Mbps
+  // A photo's real preview, served by the HP. Anything that isn't a photo has none, and shows its icon.
+  ui.thumbFor = (e) => e && e.share && e.category === 'photos' ? root.Attic.api.mediaUrl(e) : null;
+  ui.bgStyle = (e) => { const u = ui.thumbFor(e); return u ? `background-image:url('${u}')` : ''; };
+  ui.formatDuration = (secs) => {
+    if (!isFinite(secs)) return '';
+    secs = Math.round(secs);
     const h = Math.floor(secs / 3600), m = Math.floor(secs % 3600 / 60), s = secs % 60;
     return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0');
   };

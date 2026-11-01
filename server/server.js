@@ -6,7 +6,7 @@
 const http = require('http'), fs = require('fs'), path = require('path'), os = require('os');
 const { createAuth, AuthError } = require('./auth');
 const { createSafePath } = require('./safe-path');
-const { createFiles, parseRange, FileError } = require('./files');
+const { createFiles, parseRange, FileError, INLINE } = require('./files');
 const { createOwnership } = require('./ownership');
 
 const UI_ROOT = path.resolve(__dirname, '..', 'ui');
@@ -27,11 +27,14 @@ function loadConfig() {
     process.exit(1);
   }
   if (!Array.isArray(cfg.shares)) { console.error('config.json needs a "shares" array.'); process.exit(1); }
-  return { port: +process.env.ATTIC_PORT || cfg.port || 8080, host: cfg.host || '0.0.0.0', shares: cfg.shares };
+  return { raw: cfg, port: +process.env.ATTIC_PORT || cfg.port || 8080, host: cfg.host || '0.0.0.0', shares: cfg.shares };
 }
 const CONFIG = loadConfig();
 const auth = createAuth(DATA_DIR);
-const files = createFiles(CONFIG.shares, createSafePath(CONFIG.shares));
+// Shares can be edited from Settings (milestone 6), so the file layer is rebuilt whenever they change.
+let files;
+function useShares(list) { CONFIG.shares = list; files = createFiles(list, createSafePath(list)); }
+useShares(CONFIG.shares);
 const own = createOwnership(DATA_DIR);
 const MAX_UPLOAD = 20e9;
 
@@ -48,7 +51,8 @@ function saveLastSeen() {
 // Same shape as aggregate() in ui/js/api.js, so the UI swap is one function. used/total/free are the
 // drive's real figures in bytes. count and byCategory stay empty until the file index exists (milestone 4+).
 async function readShare(s) {
-  const out = { id: s.id, name: s.name, deviceType: s.deviceType || 'hdd', rootPath: s.rootPath, available: false,
+  // drive: which disk the share is on, so two shares on one drive aren't counted twice in totals.
+  const out = { id: s.id, name: s.name, deviceType: s.deviceType || 'hdd', rootPath: s.rootPath, drive: path.parse(path.resolve(s.rootPath)).root.toUpperCase(), available: false,
     lastSeenAt: lastSeen[s.id] || null, used: 0, total: 0, free: 0, count: 0, byCategory: {} };
   try {
     if (!(await fs.promises.stat(s.rootPath)).isDirectory()) return out;
@@ -66,6 +70,45 @@ async function listShares() {
   const list = await Promise.all(CONFIG.shares.map(readShare));
   saveLastSeen();
   return list;
+}
+
+// ---------- editing shares (Settings, master only) ----------
+// The change is written to config.json (whole file, renamed into place) before it takes effect, so a
+// restart comes back with exactly what Settings shows. Port and host are left as they were.
+const SHARE_TYPES = ['ssd', 'hdd', 'external'];
+function checkShare(body, id) {
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  if (!name || name.length > 64) throw new AuthError(400, 'INVALID', 'Enter a share name of up to 64 characters.');
+  const raw = typeof body.rootPath === 'string' ? body.rootPath.trim() : '';
+  if (!/^[a-zA-Z]:[\\/]/.test(raw)) throw new AuthError(400, 'INVALID', 'Give a full folder path on the server, such as D:\\Shared.');
+  const rootPath = path.resolve(raw);
+  // The brief's rule: a folder, never a drive root, so a path-checking bug can only expose that folder.
+  if (path.dirname(rootPath) === rootPath) {
+    throw new AuthError(400, 'INVALID', 'Choose a folder, not a whole drive. For example D:\\Shared rather than D:\\.');
+  }
+  const lower = rootPath.toLowerCase();
+  for (const s of CONFIG.shares) {
+    if (s.id === id) continue;
+    const other = path.resolve(s.rootPath).toLowerCase();
+    if (lower === other || lower.startsWith(other + path.sep) || other.startsWith(lower + path.sep)) {
+      throw new AuthError(409, 'OVERLAP', `That folder overlaps ${s.name} (${s.rootPath}). Shares can't contain each other.`);
+    }
+  }
+  return { name, rootPath, deviceType: SHARE_TYPES.includes(body.deviceType) ? body.deviceType : 'hdd' };
+}
+function saveShares(list) {
+  const next = Object.assign({}, CONFIG.raw, { shares: list });
+  const tmp = CONFIG_PATH + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n');
+  fs.renameSync(tmp, CONFIG_PATH);
+  CONFIG.raw = next;
+  useShares(list);
+}
+function newShareId(name) {
+  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'share';
+  let id = base;
+  for (let n = 2; CONFIG.shares.some(s => s.id === id); n++) id = `${base}-${n}`;
+  return id;
 }
 
 // ---------- http ----------
@@ -136,8 +179,9 @@ function requireMaster(req) {
 }
 
 // Streams an open file, whole or one byte range, with backpressure: memory stays flat for any size.
-// The handle closes when the stream ends, fails, or the client goes away.
-function sendFile(req, res, f) {
+// The handle closes when the stream ends, fails, or the client goes away. With inline, a photo, video
+// or audio file is served as its own type for previews and playback; anything else still downloads.
+function sendFile(req, res, f, inline) {
   let range;
   try { range = parseRange(req.headers.range, f.size); }
   catch (e) {
@@ -147,14 +191,18 @@ function sendFile(req, res, f) {
   }
   const start = range ? range.start : 0, end = range ? range.end : f.size - 1;
   const ascii = f.name.replace(/[^\x20-\x7e]|["\\]/g, '_');
+  const media = inline && INLINE[path.extname(f.name).toLowerCase()];
   const headers = {
-    'Content-Type': 'application/octet-stream',
+    'Content-Type': media || 'application/octet-stream',
     'Content-Length': f.size === 0 ? 0 : end - start + 1,
-    'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+    'Content-Disposition': `${media ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(f.name)}`,
     'Accept-Ranges': 'bytes',
     'Last-Modified': f.mtime.toUTCString(),
-    'Cache-Control': 'private, no-store',
-    'X-Content-Type-Options': 'nosniff'
+    // Previews may be cached by this browser for a while; plain downloads are never kept.
+    'Cache-Control': media ? 'private, max-age=300' : 'private, no-store',
+    'X-Content-Type-Options': 'nosniff',
+    // Even opened on its own, a served file can't run anything.
+    'Content-Security-Policy': "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox"
   };
   if (range) headers['Content-Range'] = `bytes ${start}-${end}/${f.size}`;
   res.writeHead(range ? 206 : 200, headers);
@@ -231,7 +279,7 @@ async function handleApi(req, res, url, query) {
     const who = requireSession(req);
     const view = own.view(who.session);
     if (what === 'folder' && m === 'GET') return sendJSON(res, 200, await files.listFolder(shareId, rel, view));
-    if (what === 'file' && (m === 'GET' || m === 'HEAD')) return sendFile(req, res, await files.openFile(shareId, rel, view));
+    if (what === 'file' && (m === 'GET' || m === 'HEAD')) return sendFile(req, res, await files.openFile(shareId, rel, view), query.get('inline') === '1');
     // Upload: ?path= is the destination folder plus the file's name. The uploader owns what it uploads.
     if (what === 'file' && m === 'PUT') {
       const declared = Number(req.headers['content-length']);
@@ -239,10 +287,37 @@ async function handleApi(req, res, url, query) {
       const i = rel.lastIndexOf('/');
       const saved = await files.saveUpload(shareId, i < 0 ? '' : rel.slice(0, i), rel.slice(i + 1), req, view, MAX_UPLOAD);
       own.setRecord(shareId, saved.rel, { ownerId: who.session.accountId, uploadedBy: who.session.accountId });
+      files.forget(shareId);
       const folder = saved.rel.includes('/') ? saved.rel.slice(0, saved.rel.lastIndexOf('/')) : '';
       const entry = (await files.listFolder(shareId, folder, own.view(who.session))).items.find(e => e.name === saved.name);
       return sendJSON(res, 201, entry);
     }
+  }
+
+  // Every file the caller may see, across all shares: Photos, Videos, Other, the Dashboard and search.
+  if (url === '/api/files' && m === 'GET') {
+    const who = requireSession(req);
+    if (query.get('fresh') === '1') files.forget();
+    return sendJSON(res, 200, await files.index(own.view(who.session)));
+  }
+
+  // Shares: add, edit and remove (master). Ownership is keyed by share id, and editing keeps the id, so
+  // pointing a share at a moved folder keeps who owns what. A removed share's records stay on disk unused.
+  if (url === '/api/shares' && m === 'POST') {
+    requireMaster(req);
+    const s = checkShare(body);
+    saveShares(CONFIG.shares.concat(Object.assign({ id: newShareId(s.name) }, s)));
+    return sendJSON(res, 201, (await listShares()).find(x => x.rootPath === s.rootPath));
+  }
+  const shareEdit = /^\/api\/shares\/([A-Za-z0-9_-]{1,64})$/.exec(url);
+  if (shareEdit && (m === 'PUT' || m === 'DELETE')) {
+    requireMaster(req);
+    const id = shareEdit[1];
+    if (!CONFIG.shares.some(s => s.id === id)) throw new AuthError(404, 'NOT_FOUND', 'That share no longer exists.');
+    if (m === 'DELETE') { saveShares(CONFIG.shares.filter(s => s.id !== id)); return sendJSON(res, 200, { ok: true }); }
+    const s = checkShare(body, id);
+    saveShares(CONFIG.shares.map(x => x.id === id ? Object.assign({}, x, s) : x));
+    return sendJSON(res, 200, (await listShares()).find(x => x.id === id));
   }
 
   // Keep permanently: the holder keeps these files; the uploader's claim ends.

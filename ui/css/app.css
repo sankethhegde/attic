@@ -42,6 +42,8 @@
   --cat-archives: #6250d6;
   --cat-other: #008300;
   --cat-free: #dfe2e8;
+  /* Data on the drives that isn't in a share: hatched grey, distinct from free space and from every type. */
+  --cat-outside: repeating-linear-gradient(135deg, #a9afbb 0 4px, #c6cad3 4px 8px);
 
   --font: Manrope, system-ui, -apple-system, "Segoe UI", "Noto Sans Kannada", "Noto Sans Devanagari", "Nirmala UI", sans-serif;
   --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
@@ -64,6 +66,7 @@
     --shadow-card: 0 24px 60px rgba(0, 0, 0, 0.55); --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
     --skeleton: #20242d; --skeleton-hi: #2a2f3a;
     --cat-photos: #3987e5; --cat-videos: #d95926; --cat-audio: #199e70; --cat-documents: #c98500; --cat-archives: #9085e9; --cat-other: #008300; --cat-free: #2b303b;
+    --cat-outside: repeating-linear-gradient(135deg, #555c6b 0 4px, #3d4350 4px 8px);
   }
 }
 :root[data-theme="dark"] {
@@ -77,6 +80,7 @@
   --shadow-card: 0 24px 60px rgba(0, 0, 0, 0.55); --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
   --skeleton: #20242d; --skeleton-hi: #2a2f3a;
   --cat-photos: #3987e5; --cat-videos: #d95926; --cat-audio: #199e70; --cat-documents: #c98500; --cat-archives: #9085e9; --cat-other: #008300; --cat-free: #2b303b;
+  --cat-outside: repeating-linear-gradient(135deg, #555c6b 0 4px, #3d4350 4px 8px);
 }
 
 /* ---------- base ---------- */
@@ -468,7 +472,8 @@ h1, h2, h3 { margin: 0; }
 .lightbox .icon-btn { color: #fff; }
 .lightbox .icon-btn:hover { background: rgba(255, 255, 255, .12); color: #fff; }
 .lb-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 0 12px 20px; }
-.lb-img { max-width: min(100%, 1100px); max-height: 100%; aspect-ratio: 1; height: 100%; border-radius: 10px; background: center/cover; }
+/* The whole photo, never cropped: real photos are landscape, portrait and everything between. */
+.lb-img { flex: 1; align-self: stretch; max-width: 1100px; height: 100%; background: center/contain no-repeat; }
 .lb-nav { width: 48px; height: 48px; border-radius: 50%; border: 0; background: rgba(255, 255, 255, .12); color: #fff; display: grid; place-items: center; cursor: pointer; flex: none; }
 .lb-nav:hover { background: rgba(255, 255, 255, .22); }
 .lb-nav:disabled { opacity: .3; cursor: default; }
@@ -737,7 +742,7 @@ h1, h2, h3 { margin: 0; }
   .login-card { padding: 24px 20px; }
   .card { padding: 16px; }
   .lb-nav { display: none; }
-  .lb-img { height: auto; width: 100%; }
+  .lb-img { width: 100%; }
   .share-cfg { grid-template-columns: 30px minmax(0, 1fr) auto; }
   .share-cfg .hide-sm { display: none; }
 }

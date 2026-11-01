@@ -45,7 +45,7 @@
       ${master ? `
       <section class="card" aria-labelledby="h-sh">
         <div class="card-head" style="margin-bottom:4px"><h2 id="h-sh">Shares <span class="scope">Master</span></h2><span class="grow"></span><button class="btn btn-secondary btn-sm" id="add-share">${U.icon('plus')}Add share</button></div>
-        <p class="muted" style="font-size:13px;margin:0 0 6px">Edits change mock configuration only. In Phase 1B they write the server’s config.</p>
+        <p class="muted" style="font-size:13px;margin:0 0 6px">Folders on the HP that Attic serves. Changes are saved to the server and apply straight away.</p>
         <div id="shares"><div class="skel" style="height:120px"></div></div>
       </section>
 
@@ -57,15 +57,13 @@
 
       <section class="card" aria-labelledby="h-adv">
         <h2 id="h-adv">Advanced <span class="scope">Master</span></h2>
-        <div class="set-row"><div class="lbl">Export settings<small>Theme, backgrounds, view preferences and shares, as JSON.</small></div>
+        <div class="set-row"><div class="lbl">Export settings<small>Theme, background and view preferences as JSON, with the share list for reference.</small></div>
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="export">${U.icon('download')}Export JSON</button></div></div>
-        <div class="set-row"><div class="lbl">Import settings<small>Replaces current settings and shares with the file’s.</small></div>
+        <div class="set-row"><div class="lbl">Import settings<small>Replaces this browser’s preferences with the file’s. Shares aren’t imported: add them above.</small></div>
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="import">${U.icon('upload')}Import JSON</button><input type="file" id="import-file" accept="application/json,.json" hidden></div></div>
-        <div class="set-row"><div class="lbl">Simulate failures<small>Makes 10% of data requests fail, to test error states.</small></div>
+        <div class="set-row"><div class="lbl">Simulate failures<small>Makes 10% of Devices and Transfers requests fail, to test error states. Those two views stay on sample data until Phase 2.</small></div>
           <div class="ctl"><label class="check"><input type="checkbox" id="fail" ${s.dev.failRate ? 'checked' : ''}> On</label></div></div>
-        <div class="set-row"><div class="lbl">External backup unplugged<small>Shows the unavailable-share state everywhere.</small></div>
-          <div class="ctl"><label class="check"><input type="checkbox" id="unplug"> Unplugged</label></div></div>
-        <div class="set-row"><div class="lbl" style="color:var(--danger)">Clear local data<small>Returns Attic to first-run setup.</small></div>
+        <div class="set-row"><div class="lbl" style="color:var(--danger)">Clear local data<small>Signs you out and resets this browser. Nothing on the server is touched.</small></div>
           <div class="ctl"><button class="btn btn-danger btn-sm" id="clear">${U.icon('trash')}Clear local data</button></div></div>
       </section>` : ''}
 
@@ -73,7 +71,7 @@
         <h2 id="h-about">About</h2>
         <div class="set-row"><div class="lbl">Version</div><div class="ctl mono">${VERSION}</div></div>
         <div class="set-row"><div class="lbl">Running in</div><div class="ctl">${root.atticDesktop ? `Attic Hub desktop tool${root.atticDesktop.version ? ` <span class="mono">${U.esc(root.atticDesktop.version)}</span>` : ''}` : 'A web browser'}</div></div>
-        <div class="set-row" style="display:block"><div class="banner banner-info" style="margin:0">${U.icon('info')}<span>This is Phase 1B, still on mock data. No real files are read, stored or uploaded, devices and transfers are simulated, and the sign-in is <b>not secure</b>. <span id="ix"></span></span></div></div>
+        <div class="set-row" style="display:block"><div class="banner banner-info" style="margin:0">${U.icon('info')}<span>Phase 1C. Files, shares and accounts are real and live on the HP. Devices and Transfers show sample data until Phase 2, and the connection isn’t encrypted yet, so use Attic on your home Wi-Fi only. <span id="ix"></span></span></div></div>
         <div class="set-row"><div class="lbl">Requirements</div><div class="ctl" style="flex-direction:column;align-items:flex-end;gap:4px">
           <a href="${HUB_REQUIREMENTS_URL}" target="_blank" rel="noopener">Attic Hub requirements ${U.icon('chevronRight').replace('class="ic"', 'class="ic" style="width:14px;height:14px;vertical-align:-2px"')}</a>
           <a href="${REQUIREMENTS_URL}" target="_blank" rel="noopener">Phase 1A requirements ${U.icon('chevronRight').replace('class="ic"', 'class="ic" style="width:14px;height:14px;vertical-align:-2px"')}</a></div></div>
@@ -109,12 +107,6 @@
       drawShares();
       main.querySelector('#add-share').onclick = () => shareDialog(null, drawShares);
       main.querySelector('#fail').onchange = e => save({ dev: { failRate: e.target.checked ? 0.1 : 0 } }, e.target.checked ? 'Failures on: 10% of requests will fail' : 'Failures off');
-      const unplug = main.querySelector('#unplug');
-      api.listShares().then(l => { const b = l.find(x => x.id === 'backup'); if (b) unplug.checked = !b.available; else unplug.closest('.set-row').remove(); }).catch(() => {});
-      unplug.onchange = async () => {
-        try { await api.setShareAvailable('backup', !unplug.checked); ui.toast(unplug.checked ? 'External backup is now unavailable' : 'External backup reconnected'); drawShares(); }
-        catch (e) { ui.toast(e.message, 'error'); }
-      };
       main.querySelector('#export').onclick = async () => {
         const data = await api.exportSettings();
         const a = document.createElement('a');
@@ -132,7 +124,7 @@
         if (!f) return;
         try {
           const data = JSON.parse(await f.text());
-          const ok = await ui.confirm({ title: 'Import settings?', lead: `This replaces your current settings and share list with the ones in <b>${U.esc(f.name)}</b>. Accounts and files aren’t touched.`, confirm: 'Import' });
+          const ok = await ui.confirm({ title: 'Import settings?', lead: `This replaces this browser’s theme, background and view preferences with the ones in <b>${U.esc(f.name)}</b>. Shares, accounts and files aren’t touched.`, confirm: 'Import' });
           if (!ok) return;
           await api.importSettings(data);
           state.settings = await api.getSettings();
@@ -145,15 +137,15 @@
         const ok = await ui.confirm({
           title: 'Clear all local data?', danger: true, confirm: 'Clear everything',
           lead: 'Everything Attic keeps in this browser will be deleted:',
-          body: `<ul><li>Your session — you’ll be signed out</li><li>Theme, view and background settings</li><li>Share configuration</li><li>The mock file index (it’s regenerated identically)</li><li>All custom background images you added</li></ul>
-            <p class="muted" style="font-size:13px;margin:8px 0 0">Accounts are kept on the server and aren’t affected. This can’t be undone.</p>`
+          body: `<ul><li>Your session — you’ll be signed out</li><li>Theme, view and background settings</li><li>All custom background images you added</li><li>The sample Devices and Transfers data (it’s regenerated identically)</li></ul>
+            <p class="muted" style="font-size:13px;margin:8px 0 0">Accounts, shares and files are kept on the server and aren’t affected. This can’t be undone.</p>`
         });
         if (!ok) return;
         await api.clearAllData();
         ctx.reset();
       };
     }
-    api.indexInfo().then(i => { const el = main.querySelector('#ix'); if (el) el.textContent = `Mock index: ${U.formatCount(i.entries)} entries, generated ${U.absDate(i.generatedAt)}.`; }).catch(() => {});
+    api.indexInfo().then(i => { const el = main.querySelector('#ix'); if (el) el.textContent = `${U.formatCount(i.entries)} files you can see, drives last read ${U.absDate(i.generatedAt, true)}.`; }).catch(() => {});
 
     async function drawShares() {
       const box = main.querySelector('#shares');
@@ -187,8 +179,12 @@
         dlg.querySelector('#sh-name-msg').textContent = name ? '' : 'Enter a name';
         dlg.querySelector('#sh-path-msg').textContent = path ? '' : 'Enter a path';
         if (!name || !path) return;
-        try { await api.saveShare({ id: share && share.id, name, rootPath: path, deviceType: dlg.querySelector('#sh-type').value }); close(); ui.toast(share ? 'Share saved' : 'Share added'); after(); }
-        catch (e) { ui.toast(e.message, 'error'); }
+        try {
+          const s = await api.saveShare({ id: share && share.id, name, rootPath: path, deviceType: dlg.querySelector('#sh-type').value });
+          close();
+          ui.toast(share ? 'Share saved' : s && !s.available ? `${name} added. The folder doesn’t exist yet, so it shows as unavailable.` : 'Share added');
+          after();
+        } catch (e) { (e.code === 'INVALID' && /name/i.test(e.message) ? dlg.querySelector('#sh-name-msg') : dlg.querySelector('#sh-path-msg')).textContent = e.message; }
       } }]
     });
   }
@@ -198,7 +194,7 @@
     ui.dialog({
       title: 'Change password',
       body: `<div class="form-grid">${f('cp-cur', 'Current password')}${f('cp-new', 'New password')}${f('cp-new2', 'Confirm new password')}</div>
-        <p class="mock-note" style="margin-top:4px">${U.icon('info')}<span>Prototype only: passwords are stored in plain text in this browser. Use a placeholder.</span></p>`,
+        <p class="mock-note" style="margin-top:4px">${U.icon('info')}<span>At least 6 characters. Your other signed-in devices are signed out when it changes.</span></p>`,
       actions: [{ label: 'Cancel' }, { label: 'Change password', kind: 'primary', onClick: async (close, dlg) => {
         const v = id => dlg.querySelector('#' + id).value;
         const set = (id, m) => dlg.querySelector(`#${id}-msg`).textContent = m;
