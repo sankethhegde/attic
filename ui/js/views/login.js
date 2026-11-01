@@ -1,10 +1,10 @@
-// First-run setup and the login screen.
-// THIS LOGIN IS A UI SHELL. It authenticates nobody and is deleted, not ported, in Phase 1B.
+// First-run setup and the login screen. The HP server checks every password (Phase 1C, milestone 3).
 (function (root) {
   'use strict';
   const { util: U, api, ui, background } = root.Attic;
 
-  const MOCK_NOTE = `<p class="mock-note">${U.icon('info')}<span>Prototype sign-in — not secure. Use placeholder passwords like <b>test1234</b>, never a real one.</span></p>`;
+  // Passwords are hashed on the server, but until HTTPS arrives they cross the home network unencrypted.
+  const HTTP_NOTE = `<p class="mock-note">${U.icon('info')}<span>This connection isn’t encrypted yet. Sign in only on your home Wi-Fi.</span></p>`;
 
   function field({ id, label, type, icon, autocomplete, eye, value }) {
     return `<div class="field${eye ? ' has-eye' : ''}${icon ? '' : ' no-icon'}" data-field="${id}">
@@ -17,6 +17,7 @@
   }
   function setFieldError(form, id, msg) {
     const f = form.querySelector(`[data-field="${id}"]`);
+    if (!f) return; // the Stay signed in checkbox has no message
     f.classList.toggle('invalid', !!msg);
     f.querySelector('.field-msg').textContent = msg || '';
     f.querySelector('input').setAttribute('aria-invalid', msg ? 'true' : 'false');
@@ -57,7 +58,7 @@
         ${field({ id: 'su-pass2', label: 'Confirm password', type: 'password', icon: 'lock', eye: true, autocomplete: 'new-password' })}
         <button class="btn btn-primary btn-block" type="submit" style="height:48px;margin-top:6px">Create master account</button>
         <div class="form-error" role="alert"></div>
-        ${MOCK_NOTE}
+        ${HTTP_NOTE}
       </form></div>`;
     const stage = app.querySelector('#stage');
     background.engine.mount(stage);
@@ -110,8 +111,7 @@
         <button class="btn btn-primary btn-block" type="submit" style="height:48px">Sign in</button>
         <div class="form-error" id="lg-error" role="alert"></div>
         <div id="lg-switch"></div>
-        ${MOCK_NOTE}
-        <details class="test-accts" id="test-accts"><summary>${U.icon('user')}Test accounts<span class="muted" style="font-weight:500;margin-left:auto">prototype only</span></summary><div class="ta-body"></div></details>
+        ${HTTP_NOTE}
       </form>
       <button class="corner-btn" id="bg-btn" type="button" aria-label="Change login background" title="Change background">${U.icon('image')}</button>
     </div>`;
@@ -142,30 +142,6 @@
     let thisDevice = null;
     root.Attic.device.field(form.querySelector('#lg-device'), { compact: true, onChange: async () => { thisDevice = (await root.Attic.device.current()).type; } })
       .then(d => { thisDevice = d.type; });
-
-    // Prototype helper: every account, one click to pick it. Removed with the rest of this login in Phase 1B.
-    const ta = form.querySelector('#test-accts');
-    if (opts.showAccounts) ta.open = true;
-    api.listTestAccounts().then(list => {
-      const D = root.Attic.device;
-      const chip = a => `<button type="button" class="ta-chip${a.status !== 'active' ? ' off' : ''}" data-u="${U.esc(a.username)}" data-m="${a.type}">
-          ${a.type === 'master' ? U.icon('shield') : D.art(D.LABEL[a.deviceType] ? a.deviceType : 'desktop', 26)}
-          <span class="ta-t"><b>${U.esc(a.displayName)}</b><span>@${U.esc(a.username)}${a.status !== 'active' ? ' · revoked' : ''}</span></span></button>`;
-      const master = list.filter(a => a.type === 'master'), devices = list.filter(a => a.type === 'device');
-      ta.querySelector('.ta-body').innerHTML = `
-        <div class="ta-k">Device accounts <span class="muted">— sign in with the normal form</span></div>
-        <div class="ta-grid">${devices.map(chip).join('') || '<span class="muted">None yet. The master adds them on the Dashboard.</span>'}</div>
-        ${devices.some(a => a.placeholderPassword) ? '<p class="ta-note">The starter device accounts use the password <b>test1234</b>.</p>' : ''}
-        <div class="ta-k" style="margin-top:10px">Master account <span class="muted">— uses “Sign in as master”</span></div>
-        <div class="ta-grid">${master.map(chip).join('')}</div>
-        <p class="ta-note">The master password is the one you chose during setup.</p>`;
-      ta.querySelectorAll('.ta-chip').forEach(b => b.onclick = () => {
-        setMode(b.dataset.m === 'master' ? 'master' : 'device');
-        form.querySelector('#lg-user').value = b.dataset.u;
-        form.querySelector('#lg-pass').value = '';
-        form.querySelector('#lg-pass').focus();
-      });
-    }).catch(() => ta.remove());
 
     const caps = form.querySelector('#caps');
     form.querySelector('#lg-pass').addEventListener('keyup', e => { caps.hidden = !(e.getModifierState && e.getModifierState('CapsLock')); });

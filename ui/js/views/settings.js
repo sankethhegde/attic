@@ -145,8 +145,8 @@
         const ok = await ui.confirm({
           title: 'Clear all local data?', danger: true, confirm: 'Clear everything',
           lead: 'Everything Attic keeps in this browser will be deleted:',
-          body: `<ul><li>The master account and every device account</li><li>Your session — you’ll be signed out</li><li>Theme, view and background settings</li><li>Share configuration</li><li>The mock file index (it’s regenerated identically)</li><li>All custom background images you added</li></ul>
-            <p class="muted" style="font-size:13px;margin:8px 0 0">Attic will return to first-run setup. This can’t be undone.</p>`
+          body: `<ul><li>Your session — you’ll be signed out</li><li>Theme, view and background settings</li><li>Share configuration</li><li>The mock file index (it’s regenerated identically)</li><li>All custom background images you added</li></ul>
+            <p class="muted" style="font-size:13px;margin:8px 0 0">Accounts are kept on the server and aren’t affected. This can’t be undone.</p>`
         });
         if (!ok) return;
         await api.clearAllData();

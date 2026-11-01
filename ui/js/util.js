@@ -43,8 +43,10 @@
   function pct(part, whole) { return whole ? part / whole * 100 : 0; }
   function formatPct(p) { return (p < 10 && p > 0 ? p.toFixed(1) : Math.round(p)) + '%'; }
 
-  // Timestamps are ISO UTC strings; converted to local only here.
+  // Timestamps are ISO UTC strings; converted to local only here. null means never (a share the server
+  // has not yet seen connected).
   function absDate(iso, withTime) {
+    if (iso == null) return 'never';
     const d = new Date(iso);
     const opts = { day: 'numeric', month: 'short', year: 'numeric' };
     if (withTime) { opts.hour = 'numeric'; opts.minute = '2-digit'; }
@@ -52,6 +54,7 @@
   }
   function startOfDay(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
   function relDate(iso) {
+    if (iso == null) return 'never';
     const d = new Date(iso), now = new Date();
     const diff = now - d;
     if (diff < 60e3) return 'Just now';

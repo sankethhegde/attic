@@ -205,19 +205,19 @@
           </div>`).join('')}</div>`;
     }
 
-    // ---------- upload (simulated) ----------
+    // ---------- upload (real, to the HP) ----------
     async function drawUpload(s) {
       const el = main.querySelector('#upload');
       const avail = s ? s.shares.filter(x => x.available) : [];
       el.innerHTML = `
-        <div class="card-head"><h2 id="up-h">Upload</h2><span class="tag">${U.icon('info')}Simulated in Phase 1A</span></div>
+        <div class="card-head"><h2 id="up-h">Upload</h2></div>
         <div class="drop" id="drop">${U.icon('upload')}<p>Drag files here, or</p>
           <button class="btn btn-secondary" id="browse">Browse files</button><input type="file" id="pick" multiple hidden></div>
         <div class="dest"><label for="dshare">To</label><select class="plain-select" id="dshare">${avail.map(x => `<option value="${x.id}">${U.esc(x.name)}</option>`).join('')}</select>
           <label for="dfolder" class="sr-only">Folder</label><select class="plain-select" id="dfolder" style="max-width:240px"><option value="">(top level)</option></select>
           <span class="grow"></span>${queue.length ? '<button class="btn btn-ghost btn-sm" id="clearq">Clear finished</button>' : ''}</div>
         <div class="queue" id="queue" aria-live="polite"></div>
-        <p class="muted" style="font-size:12.5px;margin:10px 0 0">Files are checked and shown with progress, then marked done — nothing is stored until Phase 2.</p>`;
+        <p class="muted" style="font-size:12.5px;margin:10px 0 0">Files are saved on the HP. A name that’s already taken gets a number added; nothing is overwritten.</p>`;
       const dshare = el.querySelector('#dshare'), dfolder = el.querySelector('#dfolder');
       const fillFolders = async () => {
         dfolder.innerHTML = '<option value="">(top level)</option>';
@@ -248,26 +248,28 @@
           queue.unshift(item);
           if (!item.error) {
             item.state = 'uploading';
-            const job = api.simulateUpload(f, p => { item.progress = p; updateRow(item); });
+            const job = api.upload(dshare.value, dfolder.value, f, p => { item.progress = p; updateRow(item); });
             item.cancel = job.cancel;
-            job.promise.then(() => { item.state = 'done'; updateRow(item); }).catch(() => { item.state = 'cancelled'; updateRow(item); });
+            job.promise.then(e => { item.state = 'done'; if (e && e.name !== item.name) item.savedAs = e.name; updateRow(item); })
+              .catch(err => { item.state = err.code === 'CANCELLED' ? 'cancelled' : 'failed'; item.error = err.message; updateRow(item); });
           }
         }
         drawUpload(s);
       }
     }
     function rowHTML(q) {
-      const st = { uploading: Math.round(q.progress * 100) + '%', done: 'Done (not stored)', rejected: q.error, cancelled: 'Cancelled', queued: 'Waiting' }[q.state];
+      const st = { uploading: Math.round(q.progress * 100) + '%', done: q.savedAs ? `Saved as ${q.savedAs}` : 'Saved', rejected: q.error, failed: q.error,
+        cancelled: 'Cancelled', queued: 'Waiting' }[q.state];
       return `<span>${U.fileIcon({ kind: 'file', category: U.classify(q.name) })}</span>
         <span style="min-width:0"><span class="nm">${U.nameHTML(q.name)}</span><span class="c" style="display:block">to ${U.esc(q.dest)}</span></span>
         <span class="mono hide-sm" style="text-align:right">${U.formatBytes(q.size)}</span>
-        <span class="bar-cell">${q.state === 'rejected' ? '' : `<span class="bar" style="display:block"><span style="width:${(q.progress * 100).toFixed(1)}%"></span></span>`}<span class="st">${U.esc(st)}</span></span>
+        <span class="bar-cell">${q.state === 'rejected' || q.state === 'failed' ? '' : `<span class="bar" style="display:block"><span style="width:${(q.progress * 100).toFixed(1)}%"></span></span>`}<span class="st">${U.esc(st)}</span></span>
         ${q.state === 'uploading' ? `<button class="icon-btn" data-cancel="${q.id}" aria-label="Cancel ${U.esc(q.name)}" style="width:32px;height:32px">${U.icon('x')}</button>` : '<span></span>'}`;
     }
     function drawQueue() {
       const box = main.querySelector('#queue');
       if (!box) return;
-      box.innerHTML = queue.map(q => `<div class="qrow ${q.state === 'done' ? 'done' : q.state === 'rejected' ? 'bad' : ''}" id="q-${q.id}">${rowHTML(q)}</div>`).join('');
+      box.innerHTML = queue.map(q => `<div class="qrow ${q.state === 'done' ? 'done' : q.state === 'rejected' || q.state === 'failed' ? 'bad' : ''}" id="q-${q.id}">${rowHTML(q)}</div>`).join('');
       box.onclick = e => { const b = e.target.closest('[data-cancel]'); if (b) { const q = queue.find(x => x.id === b.dataset.cancel); if (q && q.cancel) q.cancel(); } };
     }
     function updateRow(q) {
@@ -306,7 +308,7 @@
       body: `<form id="dev-form" class="form-grid" novalidate>
         ${f('d-name', 'Display name (e.g. Pixel 8)')}${f('d-user', 'Username')}${f('d-pass', 'Password', 'password')}
         <div class="field no-icon"><select id="d-type">${['phone', 'tablet', 'laptop', 'desktop', 'other'].map(t => `<option value="${t}">${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}</select><label for="d-type">Device type</label><div class="field-msg"></div></div>
-        <p class="mock-note" style="margin-top:0">${U.icon('info')}<span>Use a placeholder like test1234. Prototype passwords are stored in plain text.</span></p></form>`,
+        <p class="mock-note" style="margin-top:0">${U.icon('info')}<span>The device signs in with this password. Attic stores only a hash of it, so it can’t be shown again.</span></p></form>`,
       actions: [
         { label: 'Cancel' },
         { label: 'Add device', kind: 'primary', onClick: async (close, dlg) => {
