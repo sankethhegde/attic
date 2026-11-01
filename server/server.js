@@ -8,6 +8,7 @@ const { createAuth, AuthError } = require('./auth');
 const { createSafePath } = require('./safe-path');
 const { createFiles, parseRange, FileError, INLINE } = require('./files');
 const { createOwnership } = require('./ownership');
+const { startResponder, loadServerId, DEFAULT_PORT: DEFAULT_DISCOVERY_PORT } = require('./discovery');
 
 const UI_ROOT = path.resolve(__dirname, '..', 'ui');
 // Overridable so the tests can run a server on a throwaway config and data folder.
@@ -27,7 +28,12 @@ function loadConfig() {
     process.exit(1);
   }
   if (!Array.isArray(cfg.shares)) { console.error('config.json needs a "shares" array.'); process.exit(1); }
-  return { raw: cfg, port: +process.env.ATTIC_PORT || cfg.port || 8080, host: cfg.host || '0.0.0.0', shares: cfg.shares };
+  // Discovery (Phase 2, 2-1) is on unless config says "discovery": { "enabled": false }; port 0 also turns it off.
+  const d = cfg.discovery || {};
+  const envPort = process.env.ATTIC_DISCOVERY_PORT;
+  const discoveryPort = envPort !== undefined ? +envPort : d.port !== undefined ? +d.port : DEFAULT_DISCOVERY_PORT;
+  return { raw: cfg, port: +process.env.ATTIC_PORT || cfg.port || 8080, host: cfg.host || '0.0.0.0', shares: cfg.shares,
+    discovery: { enabled: d.enabled !== false && discoveryPort > 0, port: discoveryPort } };
 }
 const CONFIG = loadConfig();
 const auth = createAuth(DATA_DIR);
@@ -37,6 +43,10 @@ function useShares(list) { CONFIG.shares = list; files = createFiles(list, creat
 useShares(CONFIG.shares);
 const own = createOwnership(DATA_DIR);
 const MAX_UPLOAD = 20e9;
+// Who this server is: a stable id (kept in data/) and the PC's name. Discovery answers with them, and
+// /api/hello repeats them so a client that found an address can check it reached the HP it meant.
+const SERVER_ID = loadServerId(DATA_DIR);
+const SERVER_NAME = os.hostname();
 
 // ---------- last seen ----------
 // An unplugged drive reports when it was last connected, so that has to survive a restart.
@@ -240,6 +250,9 @@ async function handleApi(req, res, url, query) {
   if (m !== 'GET' && m !== 'HEAD') checkWrite(req, upload);
   const body = !upload && (m === 'POST' || m === 'PATCH' || m === 'PUT') ? await readBody(req) : {};
 
+  // Public: which Attic server this is. Nothing about accounts, shares or files.
+  if (url === '/api/hello' && m === 'GET') return sendJSON(res, 200, { app: 'Attic', api: 1, serverId: SERVER_ID, name: SERVER_NAME });
+
   if (url === '/api/setup') {
     if (m === 'GET') return sendJSON(res, 200, { needsSetup: auth.needsSetup() });
     if (m === 'POST') return sendJSON(res, 201, await auth.createMaster(body));
@@ -421,6 +434,10 @@ server.listen(CONFIG.port, CONFIG.host, async () => {
   for (const list of Object.values(os.networkInterfaces())) {
     for (const a of list || []) if (a.family === 'IPv4' && !a.internal) console.log(`  Home network: http://${a.address}:${CONFIG.port}`);
   }
+  if (CONFIG.discovery.enabled) {
+    const d = await startResponder({ port: CONFIG.discovery.port, httpPort: CONFIG.port, name: SERVER_NAME, serverId: SERVER_ID, log: m => console.log('  ' + m) });
+    if (d.status.listening) console.log(`  Discovery:    answering on UDP ${d.status.port} (home network only)`);
+  } else console.log('  Discovery:    off');
   console.log('Shares:');
   for (const s of await listShares()) {
     console.log(`  ${s.id.padEnd(8)} ${s.rootPath.padEnd(22)} ${s.available ? `${(s.free / 1e9).toFixed(1)} GB free of ${(s.total / 1e9).toFixed(1)} GB` : 'UNAVAILABLE'}`);
