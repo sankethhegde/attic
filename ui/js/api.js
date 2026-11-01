@@ -9,7 +9,9 @@
   const U = root.Attic.util;
   const idb = root.Attic.idb;
 
-  const K = { settings: 'fs.settings', shares: 'fs.shares', index: 'fs.mockIndex', hub: 'fs.mockHub' };
+  const K = { settings: 'fs.settings', hub: 'fs.mockHub' };
+  // Left behind by the browser mock of Phase 1A–1C: the generated file index (a few MB) and its shares.
+  try { ['fs.mockIndex', 'fs.shares', 'fs.accounts', 'fs.session'].forEach(k => localStorage.removeItem(k)); } catch (e) { /* storage blocked */ }
   const MAX_CUSTOM_BG = 10, MAX_BG_BYTES = 5e6;
   const BG_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
@@ -95,83 +97,20 @@
     }, ms));
   }
 
-  // ---------- mock index and ownership ----------
-  // The raw index is private. Every endpoint reads files through visibleIndex(session) — never rawIndex —
-  // so a forgotten owner filter is impossible rather than merely unlikely.
-  let cache = null; // { data, version } — version bumps on every commit so scoped views rebuild
-  let indexVersion = 0;
-  function rawIndex() {
-    if (cache) return cache.data;
-    let data = read(K.index, null);
-    if (!data || data.version !== root.Attic.mock.VERSION) {
-      const g = root.Attic.mock.generate({ accounts: accounts() });
-      data = { version: g.version, seed: g.seed, generatedAt: g.generatedAt, entries: g.entries };
-      write(K.index, data);
-    }
-    cache = { data };
-    indexVersion++;
+  // ---------- the file index (the HP's: milestone 6) ----------
+  // Every file the signed-in account may see, across all shares. The server does the scoping — a device
+  // only ever receives its own files and the common space — so there is no unscoped list here to misuse.
+  // Kept for a few seconds so moving between tabs doesn't re-fetch; dropped after anything that changes
+  // files or owners.
+  let index = null; // { at, data: { generatedAt, entries } }
+  async function fileIndex(fresh) {
+    if (!fresh && index && Date.now() - index.at < 10e3) return index.data;
+    const data = await http('GET', '/api/files' + (fresh ? '?fresh=1' : ''));
+    data.entries.forEach(e => Object.assign(e, { ext: U.extOf(e.name), category: U.classify(e.name) }));
+    index = { at: Date.now(), data };
     return data;
   }
-
-  // The only way any endpoint reads files. Masters see everything; a device sees its own files and the
-  // common space (ownerId null). Folders show only when they lead to something visible, or are empty for everyone.
-  function visibleIndex(session) {
-    if (!session) return [];
-    const raw = rawIndex();
-    const key = session.type + ':' + session.accountId + '@' + indexVersion;
-    if (cache.scoped && cache.scoped.key === key) return cache.scoped.entries;
-    let entries;
-    if (session.type === 'master') entries = raw.entries;
-    else {
-      const files = raw.entries.filter(e => e.kind === 'file' && (e.ownerId === session.accountId || e.ownerId === null));
-      const leadsToVisible = new Set(), hasFiles = new Set();
-      const ancestors = (e, set) => { const parts = e.path ? e.path.split('/') : []; for (let i = 1; i <= parts.length; i++) set.add(e.share + '/' + parts.slice(0, i).join('/')); };
-      for (const e of raw.entries) if (e.kind === 'file') ancestors(e, hasFiles);
-      for (const e of files) ancestors(e, leadsToVisible);
-      entries = raw.entries.filter(e => {
-        if (e.kind === 'file') return e.ownerId === session.accountId || e.ownerId === null;
-        const full = e.share + '/' + U.joinPath(e.path, e.name);
-        return leadsToVisible.has(full) || !hasFiles.has(full);
-      });
-    }
-    cache.scoped = { key, entries };
-    return entries;
-  }
-
-  // Lookup maps over a scoped list (built from visibleIndex output, never from the raw index).
-  function view(session) {
-    const entries = visibleIndex(session);
-    if (cache.view && cache.view.entries === entries) return cache.view;
-    const byId = new Map(), children = new Map(), folders = new Set();
-    for (const e of entries) {
-      byId.set(e.id, e);
-      const k = e.share + '/' + e.path;
-      if (!children.has(k)) children.set(k, []);
-      children.get(k).push(e);
-      if (e.kind === 'folder') folders.add(e.share + '/' + U.joinPath(e.path, e.name));
-    }
-    cache.view = { entries, byId, children, folders, generatedAt: cache.data.generatedAt };
-    return cache.view;
-  }
-
-  // Ownership changes are all-or-nothing: build the new list, write it once, and only then swap it in.
-  // A write that fails leaves the stored index and the cache exactly as they were.
-  function commit(session, entries) {
-    requireMaster(session);
-    const data = Object.assign({}, cache.data, { entries });
-    write(K.index, data);
-    cache = { data };
-    indexVersion++;
-  }
-
-  // Accounts (on the server) and ownership (in the mock index) change together or not at all: the index
-  // is written first, and put back if the server refuses the account change.
-  async function commitWithServer(session, nextEntries, serverCall) {
-    const before = rawIndex().entries;
-    commit(session, nextEntries);
-    try { return await serverCall(); }
-    catch (e) { commit(session, before); throw e; }
-  }
+  const forgetIndex = () => { index = null; };
 
   function sessionOrThrow() {
     if (!me) throw new ApiError('SIGNED_OUT', 'Your session has ended. Sign in again.');
@@ -181,47 +120,46 @@
     if (!session || session.type !== 'master') throw new ApiError('FORBIDDEN', 'Only the master account can do that.');
   }
 
-  function shares() {
-    let s = read(K.shares, null);
-    if (!s) { s = root.Attic.mock.defaultShares(); write(K.shares, s); }
-    return s;
-  }
-
   // ---------- accounts, as the server last reported them ----------
   function accounts() { return known; }
   const copy = a => a && Object.assign({}, a);
-  const plus = (a, b) => ({ count: a.count + b.count, bytes: a.bytes + b.bytes });
 
-  // ---------- aggregation (kept unchanged for real data in Phase 1B) ----------
+  // ---------- aggregation ----------
+  // Drive figures (used, free, total) are the drives' own, from the server. File figures (count, files,
+  // byCategory) are the files in the shares. A drive holds more than its share folder, so used is at
+  // least files; the difference is totals.outside, other data on those drives.
   function aggregate(entries, shareList) {
     const per = {};
-    for (const s of shareList) per[s.id] = { used: 0, count: 0, byCategory: {} };
+    for (const s of shareList) per[s.id] = { files: 0, count: 0, byCategory: {} };
     for (const e of entries) {
       if (e.kind !== 'file' || !per[e.share]) continue;
       const p = per[e.share];
-      p.used += e.size; p.count++;
+      p.files += e.size; p.count++;
       const c = p.byCategory[e.category] || (p.byCategory[e.category] = { size: 0, count: 0 });
       c.size += e.size; c.count++;
     }
-    const totals = { used: 0, total: 0, count: 0, byCategory: {} };
+    const totals = { used: 0, total: 0, files: 0, count: 0, drives: 0, byCategory: {} };
+    const drivesSeen = new Set(); // two shares on one drive share its capacity: count it once
     const shareRows = shareList.map(s => {
       const p = per[s.id];
-      totals.used += p.used; totals.total += s.totalBytes; totals.count += p.count;
+      if (s.available && !drivesSeen.has(s.drive)) { drivesSeen.add(s.drive); totals.used += s.used || 0; totals.total += s.total || 0; totals.drives++; }
+      totals.files += p.files; totals.count += p.count;
       for (const c in p.byCategory) {
         const t = totals.byCategory[c] || (totals.byCategory[c] = { size: 0, count: 0 });
         t.size += p.byCategory[c].size; t.count += p.byCategory[c].count;
       }
       return { id: s.id, name: s.name, deviceType: s.deviceType, rootPath: s.rootPath, available: s.available, lastSeenAt: s.lastSeenAt,
-        used: p.used, total: s.totalBytes, free: Math.max(0, s.totalBytes - p.used), count: p.count, byCategory: p.byCategory };
+        used: s.used, total: s.total, free: s.free, files: p.files, count: p.count, byCategory: p.byCategory };
     });
-    // Categories under 2% of used space fold into Other: segments that thin can't be clicked.
+    totals.outside = Math.max(0, totals.used - totals.files);
+    // Categories under 2% of the files fold into Other: segments that thin can't be clicked.
     const segments = [], collapsed = [];
     let other = Object.assign({ size: 0, count: 0 }, totals.byCategory.other);
     for (const c of U.CATEGORY_ORDER) {
       if (c === 'other') continue;
       const v = totals.byCategory[c];
       if (!v) continue;
-      if (v.size / totals.used < 0.02) { collapsed.push(Object.assign({ category: c }, v)); other.size += v.size; other.count += v.count; }
+      if (v.size / totals.files < 0.02) { collapsed.push(Object.assign({ category: c }, v)); other.size += v.size; other.count += v.count; }
       else segments.push(Object.assign({ category: c }, v));
     }
     if (other.size || other.count) segments.push(Object.assign({ category: 'other', collapsed }, other));
@@ -295,12 +233,12 @@
       return (await http('GET', '/api/setup')).needsSetup;
     },
 
-    // The server creates the master. The mock index and hub are regenerated on first read, owned by
-    // whichever accounts exist then.
+    // The server creates the master. The mock hub (devices and transfers, until Phase 2) is regenerated
+    // on first read, owned by the new master.
     async createMaster({ displayName, username, password }) {
       const master = await http('POST', '/api/setup', { displayName, username, password });
-      try { localStorage.removeItem(K.index); localStorage.removeItem(K.hub); } catch (e) { /* ignore */ }
-      cache = null;
+      try { localStorage.removeItem(K.hub); } catch (e) { /* ignore */ }
+      forgetIndex();
       return master;
     },
 
@@ -317,7 +255,7 @@
 
     async signOut() {
       try { await http('DELETE', '/api/session', {}); }
-      finally { me = null; known = []; }
+      finally { me = null; known = []; forgetIndex(); }
     },
 
     // ---------- accounts ----------
@@ -326,7 +264,7 @@
       const session = sessionOrThrow();
       requireMaster(session);
       await refreshAccounts();
-      const totals = ownerTotals(visibleIndex(session));
+      const totals = ownerTotals((await fileIndex()).entries);
       return accounts().filter(a => a.type === 'device').map(a => Object.assign(copy(a), { owned: totals.get(a.id) || { count: 0, bytes: 0 } }))
         .sort((a, b) => (a.status === b.status ? 0 : a.status === 'active' ? -1 : 1) || (b.lastSeenAt || '').localeCompare(a.lastSeenAt || ''));
     },
@@ -340,61 +278,31 @@
     },
 
     // File count and bytes an account owns now, and what it uploaded that someone else holds in custody.
-    // Real files (the server's, milestone 5) plus the mock index still behind Photos, Videos and the
-    // Dashboard, until milestone 6 retires it.
     async ownershipSummary(accountId) {
-      await delay(true);
-      const session = sessionOrThrow();
-      requireMaster(session);
-      const owned = { count: 0, bytes: 0 }, inCustody = { count: 0, bytes: 0 };
-      for (const e of visibleIndex(session)) {
-        if (e.kind !== 'file') continue;
-        if (e.ownerId === accountId) { owned.count++; owned.bytes += e.size; }
-        if (e.uploadedBy === accountId && e.ownerId !== accountId) { inCustody.count++; inCustody.bytes += e.size; }
-      }
-      const real = await http('GET', `/api/accounts/${encodeURIComponent(accountId)}/ownership`);
-      return { accountId, owned: plus(owned, real.owned), inCustody: plus(inCustody, real.inCustody) };
+      requireMaster(sessionOrThrow());
+      return http('GET', `/api/accounts/${encodeURIComponent(accountId)}/ownership`);
     },
 
-    // Revoke: every file the account owns goes to the custodian; uploadedBy is untouched so restore can return it.
+    // Revoke: every file the account owns goes to the custodian; uploadedBy is untouched so restore can
+    // return it. The server moves the files and signs the device out together, or does neither.
     async revokeDevice(id, custodianId) {
-      await delay(true);
-      const session = sessionOrThrow();
-      requireMaster(session);
+      requireMaster(sessionOrThrow());
       await refreshAccounts();
-      const list = accounts();
-      const acc = list.find(a => a.id === id && a.type === 'device');
-      if (!acc) throw new ApiError('NOT_FOUND', 'That device no longer exists.');
-      const custodian = checkCustodian(list, custodianId, id);
-      let moved = 0, bytes = 0;
-      const next = visibleIndex(session).map(e => {
-        if (e.kind !== 'file' || e.ownerId !== id) return e;
-        moved++; bytes += e.size;
-        return Object.assign({}, e, { ownerId: custodian.id });
-      });
-      const r = await commitWithServer(session, next, () => http('POST', `/api/accounts/${encodeURIComponent(id)}/revoke`, { custodianId: custodian.id }));
+      const custodian = checkCustodian(accounts(), custodianId, id);
+      const r = await http('POST', `/api/accounts/${encodeURIComponent(id)}/revoke`, { custodianId: custodian.id });
+      forgetIndex();
       await refreshAccounts();
-      return { account: r.account, moved: plus({ count: moved, bytes }, r.moved), custodian: copy(custodian) };
+      return { account: r.account, moved: r.moved, custodian: copy(custodian) };
     },
 
     // Restore: files this account uploaded that someone else still holds come back. Cleared uploadedBy means
     // nothing returns — zero is a correct answer, not a failure.
     async restoreDevice(id) {
-      await delay(true);
-      const session = sessionOrThrow();
-      requireMaster(session);
+      requireMaster(sessionOrThrow());
+      const r = await http('POST', `/api/accounts/${encodeURIComponent(id)}/restore`, {});
+      forgetIndex();
       await refreshAccounts();
-      const acc = accounts().find(a => a.id === id && a.type === 'device');
-      if (!acc) throw new ApiError('NOT_FOUND', 'That device no longer exists.');
-      let returned = 0, bytes = 0;
-      const next = visibleIndex(session).map(e => {
-        if (e.kind !== 'file' || e.uploadedBy !== id || e.ownerId === id) return e;
-        returned++; bytes += e.size;
-        return Object.assign({}, e, { ownerId: id });
-      });
-      const r = await commitWithServer(session, next, () => http('POST', `/api/accounts/${encodeURIComponent(id)}/restore`, {}));
-      await refreshAccounts();
-      return { account: r.account, returned: plus({ count: returned, bytes }, r.returned) };
+      return { account: r.account, returned: r.returned };
     },
 
     // Kept for callers that only flip status; revoking always needs a custodian.
@@ -404,24 +312,11 @@
     },
 
     // Master only: end the uploader's claim on these files. The only change to uploadedBy besides removal.
-    // Real files ("r:" ids) are kept on the server; mock ones in the mock index.
     async reassignPermanently(fileIds) {
-      await delay(true);
-      const session = sessionOrThrow();
-      requireMaster(session);
-      const realIds = fileIds.filter(id => String(id).startsWith('r:'));
-      const ids = new Set(fileIds.filter(id => !String(id).startsWith('r:')));
-      let cleared = 0;
-      if (ids.size) {
-        const next = visibleIndex(session).map(e => {
-          if (!ids.has(e.id) || e.uploadedBy == null || e.uploadedBy === e.ownerId) return e;
-          cleared++;
-          return Object.assign({}, e, { uploadedBy: null });
-        });
-        commit(session, next);
-      }
-      if (realIds.length) cleared += (await http('POST', '/api/files/keep', { ids: realIds })).cleared;
-      return { cleared };
+      requireMaster(sessionOrThrow());
+      const r = await http('POST', '/api/files/keep', { ids: fileIds });
+      forgetIndex();
+      return { cleared: r.cleared };
     },
 
     async createDevice({ displayName, username, password, deviceType }) {
@@ -433,25 +328,15 @@
     // Remove: permanent. Owned files go to the custodian, and every uploadedBy pointing at this account is
     // cleared — nothing can be returned to an account that no longer exists.
     async removeDevice(id, custodianId) {
-      await delay(true);
-      const session = sessionOrThrow();
-      requireMaster(session);
+      requireMaster(sessionOrThrow());
       await refreshAccounts();
-      const list = accounts();
-      const acc = list.find(a => a.id === id);
+      const acc = accounts().find(a => a.id === id);
       if (!acc || acc.type === 'master') throw new ApiError('FORBIDDEN', 'The master account can’t be deleted.');
-      const custodian = checkCustodian(list, custodianId, id);
-      let moved = 0, bytes = 0;
-      const next = visibleIndex(session).map(e => {
-        if (e.kind !== 'file' || (e.ownerId !== id && e.uploadedBy !== id)) return e;
-        const out = Object.assign({}, e);
-        if (e.ownerId === id) { out.ownerId = custodian.id; moved++; bytes += e.size; }
-        if (e.uploadedBy === id) out.uploadedBy = null;
-        return out;
-      });
-      const r = await commitWithServer(session, next, () => http('POST', `/api/accounts/${encodeURIComponent(id)}/remove`, { custodianId: custodian.id }));
+      const custodian = checkCustodian(accounts(), custodianId, id);
+      const r = await http('POST', `/api/accounts/${encodeURIComponent(id)}/remove`, { custodianId: custodian.id });
+      forgetIndex();
       await refreshAccounts();
-      return { moved: plus({ count: moved, bytes }, r.moved), custodian: copy(custodian) };
+      return { moved: r.moved, custodian: copy(custodian) };
     },
 
     async updateDisplayName(id, displayName) {
@@ -466,44 +351,31 @@
       await http('POST', `/api/accounts/${encodeURIComponent(id)}/password`, { current, next });
     },
 
-    // ---------- shares ----------
-    // Phase 1C milestone 1: the first real endpoint. Real drive figures from the HP server; every other
-    // function here still reads mock data. Per-device scoping returns server-side with login (milestone 3).
+    // ---------- shares (the HP's drives, and its config) ----------
+    // Drive figures come from the server; the file count is the caller's own files from the index. A
+    // device gets no capacity or free space, and "used" is the size of the files it can see.
     async listShares() {
-      const res = await fetch('/api/shares').catch(() => null);
-      if (!res || !res.ok) throw new ApiError('UNREACHABLE', 'Could not reach the server.');
-      return res.json();
-    },
-
-    async saveShare(share) {
-      await delay(true);
-      const list = shares();
-      if (!share.name.trim()) throw new ApiError('INVALID', 'Enter a share name.');
-      if (share.id) {
-        const s = list.find(x => x.id === share.id);
-        if (!s) throw new ApiError('NOT_FOUND', 'That share no longer exists.');
-        Object.assign(s, { name: share.name.trim(), rootPath: share.rootPath.trim(), deviceType: share.deviceType });
-      } else {
-        list.push({ id: uid('sh_'), name: share.name.trim(), rootPath: share.rootPath.trim(), deviceType: share.deviceType || 'hdd',
-          totalBytes: 500e9, available: true, lastSeenAt: now() });
+      const [list, ix] = await Promise.all([http('GET', '/api/shares'), fileIndex().catch(() => null)]);
+      if (ix) {
+        const per = {};
+        for (const e of ix.entries) { const p = per[e.share] || (per[e.share] = { count: 0, bytes: 0 }); p.count++; p.bytes += e.size; }
+        list.forEach(s => { const p = per[s.id] || { count: 0, bytes: 0 }; s.count = p.count; if (s.total == null) s.used = p.bytes; });
       }
-      write(K.shares, list);
+      return list;
     },
 
+    // Master only. Written to the server's config.json, so it survives a restart.
+    async saveShare(share) {
+      const body = { name: share.name, rootPath: share.rootPath, deviceType: share.deviceType };
+      const saved = share.id ? await http('PUT', `/api/shares/${encodeURIComponent(share.id)}`, body) : await http('POST', '/api/shares', body);
+      forgetIndex();
+      return saved;
+    },
+
+    // Stops serving the folder. Nothing on disk is touched.
     async removeShare(id) {
-      await delay(true);
-      write(K.shares, shares().filter(s => s.id !== id));
-    },
-
-    async setShareAvailable(id, available) {
-      await delay(false);
-      const list = shares();
-      const s = list.find(x => x.id === id);
-      if (!s) throw new ApiError('NOT_FOUND', 'That share no longer exists.');
-      if (s.available && !available) s.lastSeenAt = now();
-      s.available = available;
-      if (available) s.lastSeenAt = now();
-      write(K.shares, list);
+      await http('DELETE', `/api/shares/${encodeURIComponent(id)}`, {});
+      forgetIndex();
     },
 
     // ---------- files (real, from the HP: milestone 4) ----------
@@ -532,25 +404,29 @@
 
     // Where the browser downloads a file from. A plain link: the browser streams it to disk itself,
     // resumes with Range requests, and the session cookie goes along.
+    // ' ( ) are escaped too: these URLs also go inside CSS url('…') for previews.
     downloadUrl(e) {
-      return `/api/shares/${encodeURIComponent(e.share)}/file?path=${encodeURIComponent(U.joinPath(e.path, e.name))}`;
+      const enc = s => encodeURIComponent(s).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+      return `/api/shares/${enc(e.share)}/file?path=${enc(U.joinPath(e.path, e.name))}`;
     },
 
-    // Photos, Videos and Other are filtered views over the same index — not separate storage.
+    // Where the browser shows a photo, video or audio file in place: a preview, the photo viewer, a
+    // player. The server serves only those types this way; anything else still downloads.
+    mediaUrl(e) {
+      return api.downloadUrl(e) + '&inline=1';
+    },
+
+    // Photos, Videos and Other are filtered views over the same index — not separate storage. An
+    // unplugged share has nothing in the index, so its files simply aren't there.
     async listByTab(tab, { share, query } = {}) {
-      await delay(true);
-      const avail = new Set(shares().filter(s => s.available).map(s => s.id));
-      return visibleIndex(sessionOrThrow()).filter(e => e.kind === 'file' && avail.has(e.share) && U.tabOf(e.category) === tab &&
-        (!share || e.share === share) && matchQuery(e.name, query));
+      return (await fileIndex()).entries.filter(e => U.tabOf(e.category) === tab && (!share || e.share === share) && matchQuery(e.name, query));
     },
 
-    // Master only. Adds the breakdown by owner alongside the breakdown by type.
-    async getStorage() {
-      await delay(true);
-      const session = sessionOrThrow();
-      requireMaster(session);
-      const entries = visibleIndex(session);
-      const agg = aggregate(entries, shares());
+    // Master only. Adds the breakdown by owner alongside the breakdown by type. Refresh walks the drives again.
+    async getStorage({ fresh } = {}) {
+      requireMaster(sessionOrThrow());
+      const [{ entries }, shareList] = await Promise.all([fileIndex(fresh), http('GET', '/api/shares')]);
+      const agg = aggregate(entries, shareList);
       const names = new Map(accounts().map(a => [a.id, a]));
       agg.byOwner = [...ownerTotals(entries)].map(([id, t]) => {
         const a = id && names.get(id);
@@ -563,11 +439,8 @@
     },
 
     async getCategoryDetail(category) {
-      await delay(true);
-      const session = sessionOrThrow();
-      requireMaster(session);
-      const list = shares();
-      const entries = visibleIndex(session);
+      requireMaster(sessionOrThrow());
+      const [{ entries }, list] = await Promise.all([fileIndex(), http('GET', '/api/shares')]);
       const agg = aggregate(entries, list);
       const seg = agg.segments.find(s => s.category === category);
       const cats = new Set([category]);
@@ -582,7 +455,7 @@
         (byExt[x] = byExt[x] || { size: 0, count: 0 }); byExt[x].size += f.size; byExt[x].count++;
       }
       return {
-        category, includes: [...cats], total, count: files.length, used: agg.totals.used, files,
+        category, includes: [...cats], total, count: files.length, used: agg.totals.files, files,
         byShare: list.map(s => Object.assign({ id: s.id, name: s.name, available: s.available }, byShare[s.id] || { size: 0, count: 0 })).filter(s => s.count),
         byExt: Object.entries(byExt).map(([ext, v]) => Object.assign({ ext }, v)).sort((a, b) => b.size - a.size)
       };
@@ -663,7 +536,7 @@
           xhr.onload = () => {
             let data = null;
             try { data = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
-            if (xhr.status === 201) { onProgress(1); return resolve(data); }
+            if (xhr.status === 201) { onProgress(1); forgetIndex(); return resolve(data); }
             if (xhr.status === 401) { me = null; known = []; }
             reject(new ApiError((data && data.code) || 'SERVER', (data && data.message) || 'The upload failed.'));
           };
@@ -723,31 +596,32 @@
     },
 
     // ---------- advanced ----------
+    // This browser's preferences, with the server's shares listed for reference. Shares live in the
+    // server's config, so importing never changes them: that's done in Settings, one share at a time.
     async exportSettings() {
-      await delay(false);
-      return { app: 'Attic', kind: 'settings', version: 1, exportedAt: now(), settings: settings(), shares: shares() };
+      const shares = (await http('GET', '/api/shares')).map(s => ({ id: s.id, name: s.name, rootPath: s.rootPath, deviceType: s.deviceType }));
+      return { app: 'Attic', kind: 'settings', version: 2, exportedAt: now(), settings: settings(), shares };
     },
 
     async importSettings(data) {
       await delay(false);
       if (!data || data.app !== 'Attic' || data.kind !== 'settings') throw new ApiError('INVALID', 'That file isn’t an Attic settings export.');
       if (data.settings) write(K.settings, Object.assign(clone(DEFAULT_SETTINGS), data.settings));
-      if (Array.isArray(data.shares)) write(K.shares, data.shares);
     },
 
-    // This browser's data only. Accounts live on the server and are untouched; you're signed out.
+    // This browser's data only. Accounts, shares and files live on the server and are untouched; you're signed out.
     async clearAllData() {
       await api.signOut().catch(() => {});
       for (const store of [localStorage, sessionStorage]) {
         Object.keys(store).filter(k => k.startsWith('fs.')).forEach(k => store.removeItem(k));
       }
       await idb.destroy();
-      cache = null;
+      forgetIndex();
     },
 
+    // How many files the index holds for this account, and when the drives were last walked.
     async indexInfo() {
-      await delay(false);
-      const ix = view(sessionOrThrow());
+      const ix = await fileIndex();
       return { entries: ix.entries.length, generatedAt: ix.generatedAt };
     }
   };

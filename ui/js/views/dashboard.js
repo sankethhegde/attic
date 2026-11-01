@@ -42,11 +42,11 @@
         <section class="card" id="upload" aria-labelledby="up-h"></section>
       </div></div>`;
 
-    async function loadStorage() {
+    async function loadStorage(fresh) {
       const btn = main.querySelector('#refresh');
       btn.disabled = true;
       try {
-        const s = await api.getStorage();
+        const s = await api.getStorage({ fresh });
         drawSummary(s); drawShares(s); drawTypes(s); drawOwners(s); drawBanners(s);
         main.querySelector('#checked').textContent = 'Updated ' + U.timeOnly(s.checkedAt);
         return s;
@@ -54,7 +54,8 @@
         ['#summary', '#per-share', '#by-type', '#by-owner'].forEach(id => { const el = main.querySelector(id); el.innerHTML = ui.errorState(e, 'retry' + id.slice(1)); el.querySelector('button').onclick = refresh; });
       } finally { btn.disabled = false; }
     }
-    async function refresh() { const s = await loadStorage(); loadDevices(); drawUpload(s); }
+    // Refresh walks the drives again, so files added outside Attic show up.
+    async function refresh() { const s = await loadStorage(true); loadDevices(); drawUpload(s); }
 
     // A dashboard that looks the same at 40% and 95% has failed at its one job.
     function drawBanners(s) {
@@ -62,16 +63,19 @@
         `<div class="banner banner-danger" role="alert">${U.icon('alert')}<span><b>${U.esc(x.name)}</b> has only ${U.formatBytes(x.free)} free (${U.formatPct(U.pct(x.free, x.total))}).${x.available ? ' Free up space before it fills completely.' : ' Last known figures — the drive is unavailable.'}</span></div>`).join('');
     }
 
+    // Used and free are the drives' own figures. Files in the shares are coloured by type; whatever else
+    // the drives hold (Windows, programs, folders outside the shares) is one band of its own.
     function drawSummary(s) {
       const t = s.totals, p = U.pct(t.used, t.total);
-      const segs = s.segments.map(g => ({ key: g.category, size: g.size, count: g.count })).concat([{ key: 'free', size: t.total - t.used }]);
+      const segs = s.segments.map(g => ({ key: g.category, size: g.size, count: g.count }))
+        .concat(t.outside ? [{ key: 'outside', size: t.outside }] : [], [{ key: 'free', size: Math.max(0, t.total - t.used) }]);
       main.querySelector('#summary').innerHTML = `
         <div class="card-head"><h2 id="sum-h">Storage across all shares</h2></div>
-        <div class="hero-num">${U.formatBytes(t.used)} <small>of ${U.formatBytes(t.total)} used</small></div>
+        <div class="hero-num">${U.formatBytes(t.used)} <small>of ${U.formatBytes(t.total)} used${t.drives > 1 ? ` on ${t.drives} drives` : t.drives === 1 ? ' on 1 drive' : ''}</small></div>
         <div class="status-line"><b style="font-size:17px">${U.formatPct(p)}</b>${statusTag(p)}<span class="muted" style="font-size:13px">${U.formatCount(t.count)} files on ${s.shares.length} shares</span></div>
         <div class="segbar-wrap ${level(p)}"><div class="segbar" role="img" aria-label="${segs.map(x => `${U.CATEGORY_LABEL[x.key]} ${U.formatBytes(x.size)}`).join(', ')}">
           ${segs.map(x => `<span class="s" data-k="${x.key}" style="flex:${x.size} 1 0;background:${color(x.key)}"></span>`).join('')}</div></div>
-        <p class="muted" style="font-size:12.5px;margin:10px 0 0">Coloured by file type, matching <a href="#by-type" id="to-type">Storage by type</a> below. The grey end is free space.</p>`;
+        <p class="muted" style="font-size:12.5px;margin:10px 0 0">Files in your shares are coloured by type, matching <a href="#by-type" id="to-type">Storage by type</a> below.${t.outside ? ' The hatched band is other data on the same drives.' : ''} The grey end is free space.</p>`;
       const bar = main.querySelector('#summary .segbar');
       bar.querySelectorAll('.s').forEach(el => {
         const x = segs.find(g => g.key === el.dataset.k);
@@ -101,7 +105,7 @@
     }
 
     function drawTypes(s) {
-      const used = s.totals.used;
+      const used = s.totals.files; // percentages here are of the files in the shares
       const el = main.querySelector('#by-type');
       el.innerHTML = `
         <div class="card-head"><h2 id="bt-h">Storage by type</h2><span class="grow"></span><span class="muted" style="font-size:13px">Select a type to see its largest files</span></div>
@@ -198,10 +202,10 @@
         <div class="owner-rows">${s.byOwner.map(o => `
           <div class="owner-row">
             <span class="nm">${U.esc(o.name)}${o.status === 'revoked' ? ' <span class="muted">(revoked)</span>' : ''}<span class="c">${o.type === 'common' ? 'Shared with every account' : o.type === 'master' ? 'Master' : o.type === 'unknown' ? 'No longer exists' : 'Device'}</span></span>
-            <span class="bar" role="img" aria-label="${U.formatPct(U.pct(o.bytes, s.totals.used))} of used space"><span style="width:${U.pct(o.bytes, max).toFixed(1)}%" class="${o.type === 'common' ? 'common' : ''}"></span></span>
+            <span class="bar" role="img" aria-label="${U.formatPct(U.pct(o.bytes, s.totals.files))} of the files in your shares"><span style="width:${U.pct(o.bytes, max).toFixed(1)}%" class="${o.type === 'common' ? 'common' : ''}"></span></span>
             <span class="mono num">${U.formatBytes(o.bytes)}</span>
             <span class="c num hide-sm">${U.formatCount(o.count)} files</span>
-            <span class="c num">${U.formatPct(U.pct(o.bytes, s.totals.used))}</span>
+            <span class="c num">${U.formatPct(U.pct(o.bytes, s.totals.files))}</span>
           </div>`).join('')}</div>`;
     }
 

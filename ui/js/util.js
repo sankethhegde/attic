@@ -12,7 +12,7 @@
   const BY_EXT = {};
   for (const cat in EXT) for (const e of EXT[cat]) BY_EXT[e] = cat;
 
-  const CATEGORY_LABEL = { photos: 'Photos', videos: 'Videos', audio: 'Audio', documents: 'Documents', archives: 'Archives', other: 'Other', free: 'Free' };
+  const CATEGORY_LABEL = { photos: 'Photos', videos: 'Videos', audio: 'Audio', documents: 'Documents', archives: 'Archives', other: 'Other', outside: 'Other data on the drives', free: 'Free' };
   const CATEGORY_ORDER = ['photos', 'videos', 'audio', 'documents', 'archives', 'other'];
 
   // Always lowercase before matching: ".JPG" and ".Mp4" must classify like their lowercase twins.

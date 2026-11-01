@@ -31,22 +31,32 @@
   function detailDialog(ctx, e, shares) {
     const share = shares.find(s => s.id === e.share) || { name: e.share, rootPath: '' };
     const full = share.rootPath + '\\' + U.joinPath(e.path, e.name).replace(/\//g, '\\');
-    const isVideo = e.category === 'videos';
+    const isVideo = e.category === 'videos', isAudio = e.category === 'audio';
+    // Played straight from the HP; the browser fetches only what it plays, in ranges. A format the browser
+    // can't play (some .mov or .flac files) says so, and the file can still be downloaded.
+    const player = isVideo ? `<video controls preload="metadata" src="${api.mediaUrl(e)}" style="display:block;width:100%;max-height:55vh;border-radius:12px;background:#000;margin-bottom:14px"></video>`
+      : isAudio ? `<audio controls preload="metadata" src="${api.mediaUrl(e)}" style="display:block;width:100%;margin-bottom:14px"></audio>` : '';
     const d = ui.dialog({
-      title: e.name, label: 'Details for ' + e.name,
-      body: `${isVideo ? `<div class="vcard" style="border:0;margin-bottom:14px;cursor:default"><div class="poster" style="background-image:url('${ui.thumbFor(e.name)}');border-radius:12px"><span class="play">${U.icon('play')}</span><span class="dur">${ui.durationFor(e)}</span></div></div>
-          <div class="banner banner-info">${U.icon('info')}<span>Playback arrives in Phase 4. For now this shows the file’s details.</span></div>` : ''}
+      title: e.name, label: 'Details for ' + e.name, wide: isVideo,
+      body: `${player}<div class="banner banner-warning" id="cant-play" hidden>${U.icon('alert')}<span>This browser can’t play this format. Download it to play it on this device.</span></div>
         <dl class="kv">
           <dt>Location</dt><dd class="mono">${U.esc(full)}</dd>
           <dt>Size</dt><dd><span class="mono">${U.formatBytes(e.size)}</span></dd>
-          ${isVideo ? `<dt>Duration</dt><dd class="mono">${ui.durationFor(e)}</dd>` : ''}
+          ${isVideo || isAudio ? `<dt>Duration</dt><dd class="mono" id="dur">…</dd>` : ''}
           <dt>Type</dt><dd>${U.esc(U.typeLabel(e))}</dd>
           <dt>Modified</dt><dd>${U.absDate(e.modifiedAt, true)}</dd>
         </dl>`,
       actions: [
         { label: 'Close', kind: 'secondary' },
         { label: 'Reveal in Files', kind: 'primary', onClick: c => { c(); reveal(ctx, e); } }
-      ]
+      ],
+      onOpen: (dlg) => {
+        const m = dlg.querySelector('video, audio');
+        if (!m) return;
+        const dur = dlg.querySelector('#dur');
+        m.onloadedmetadata = () => { dur.textContent = ui.formatDuration(m.duration) || 'Unknown'; };
+        m.onerror = () => { dur.textContent = 'Unknown'; m.hidden = true; dlg.querySelector('#cant-play').hidden = false; };
+      }
     });
     return d;
   }
@@ -64,7 +74,7 @@
       lb.innerHTML = `<div class="lb-top"><div class="info"><div class="nm">${U.nameHTML(e.name)}</div><div class="c">${U.absDate(e.modifiedAt, true)} · <span class="mono">${U.formatBytes(e.size)}</span> · ${i + 1} of ${list.length}</div></div>
         ${revealButton(e)}<button class="icon-btn" id="lb-close" aria-label="Close viewer">${U.icon('x')}</button></div>
         <div class="lb-stage"><button class="lb-nav" id="lb-prev" aria-label="Previous photo" ${i === 0 ? 'disabled' : ''}>${U.icon('chevronLeft')}</button>
-        <div class="lb-img" role="img" aria-label="${U.esc(e.name)}" style="background-image:url('${ui.thumbFor(e.name)}')"></div>
+        <div class="lb-img" role="img" aria-label="${U.esc(e.name)}" style="${ui.bgStyle(e)}"></div>
         <button class="lb-nav" id="lb-next" aria-label="Next photo" ${i === list.length - 1 ? 'disabled' : ''}>${U.icon('chevronRight')}</button></div>`;
       lb.querySelector('.btn').className = 'btn btn-secondary btn-sm';
       lb.querySelector('[data-reveal]').onclick = () => { close(); reveal(ctx, e); };
@@ -175,12 +185,12 @@
           if (r.head) return ui.el(`<div class="${tab === 'other' ? 'group-head' : 'date-head'}"><span>${U.esc(r.head.label)}</span><span class="n">${U.formatCount(r.head.items.length)}</span></div>`);
           if (tab === 'photos') {
             const d = ui.el(`<div class="pgrid-row" style="grid-template-columns:repeat(${r.cols},minmax(0,1fr));gap:6px"></div>`);
-            d.innerHTML = r.items.map(e => `<button class="ptile" data-id="${e.id}" style="background-image:url('${ui.thumbFor(e.name)}')" aria-label="${U.esc(e.name)}, ${U.absDate(e.modifiedAt)}"></button>`).join('');
+            d.innerHTML = r.items.map(e => `<button class="ptile" data-id="${e.id}" style="${ui.bgStyle(e)}" aria-label="${U.esc(e.name)}, ${U.absDate(e.modifiedAt)}"></button>`).join('');
             return d;
           }
           if (tab === 'videos') {
             const d = ui.el(`<div class="pgrid-row" style="grid-template-columns:repeat(${r.cols},minmax(0,1fr));gap:${r.gap}px;padding-bottom:${r.gap}px"></div>`);
-            d.innerHTML = r.items.map(e => `<button class="vcard" data-id="${e.id}"><span class="poster" style="background-image:url('${ui.thumbFor(e.name)}')"><span class="play">${U.icon('play')}</span><span class="dur">${ui.durationFor(e)}</span></span>
+            d.innerHTML = r.items.map(e => `<button class="vcard" data-id="${e.id}"><span class="poster"><span class="play">${U.icon('play')}</span></span>
               <span class="meta"><span class="nm">${U.nameHTML(e.name)}</span><span class="c" style="display:block">${U.relDate(e.modifiedAt)} · <span class="mono">${U.formatBytes(e.size)}</span></span></span></button>`).join('');
             return d;
           }

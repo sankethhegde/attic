@@ -9,6 +9,17 @@ class FileError extends Error {
   constructor(status, code, message) { super(message); this.status = status; this.code = code; }
 }
 const NOT_FOUND = what => new FileError(404, 'NOT_FOUND', `This ${what} doesn’t exist any more.`);
+const INDEX_TTL = 30e3;   // how long one walk of a share is reused
+const INDEX_MAX = 200000; // files per share; past this a real database is due (the brief's SQLite step)
+
+// Media the browser may show in place (previews, the photo viewer, video playback), by extension, with
+// the type it's served as. Nothing that can run script: no SVG, HTML or PDF. Everything else downloads.
+const INLINE = {
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp',
+  '.bmp': 'image/bmp', '.avif': 'image/avif', '.heic': 'image/heic',
+  '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.flac': 'audio/flac'
+};
 
 // Ids are stable across listings: the share and the path, so a reload can reselect the same file.
 const fileId = (shareId, rel) => 'r:' + Buffer.from(shareId + '\n' + rel, 'utf8').toString('base64url');
@@ -45,6 +56,33 @@ function createFiles(shares, safePath) {
     if (e instanceof FileError) return e;
     return e.code === 'EPERM' || e.code === 'EACCES' ? new FileError(403, 'FORBIDDEN', `Windows won’t let Attic open this ${what}.`) : NOT_FOUND(what);
   }
+  // ---------- the index ----------
+  const indexCache = new Map(); // shareId -> { at, files: [{ rel, size, modifiedAt }] }
+  // Depth-first, one folder at a time, so a big share never has thousands of directory handles open.
+  // An unplugged share, or a folder Windows won't open, simply contributes nothing.
+  async function walkShare(share) {
+    let root;
+    try { root = await fs.promises.realpath(share.rootPath); } catch (e) { return []; }
+    const files = [], stack = [''];
+    while (stack.length && files.length < INDEX_MAX) {
+      const rel = stack.pop();
+      let dirents;
+      try { dirents = await fs.promises.readdir(rel ? path.join(root, ...rel.split('/')) : root, { withFileTypes: true }); } catch (e) { continue; }
+      for (const d of dirents) {
+        if (d.isSymbolicLink() || isTemp(d.name)) continue;
+        const childRel = joinRel(rel, d.name);
+        if (!safePath(share.id, childRel)) continue;
+        if (d.isDirectory()) { stack.push(childRel); continue; }
+        if (!d.isFile()) continue;
+        try {
+          const st = await fs.promises.stat(path.join(root, ...childRel.split('/')));
+          files.push({ rel: childRel, size: st.size, modifiedAt: st.mtime.toISOString() });
+        } catch (e) { /* vanished or locked */ }
+      }
+    }
+    return files;
+  }
+
   // The path as the disk spells it, relative to the share. Ownership is keyed and checked on this, never
   // on the client's spelling: Windows treats "Report.pdf" and "report.pdf" as one file.
   const canonical = (root, real) => path.relative(root, real).split(path.sep).join('/');
@@ -136,6 +174,32 @@ function createFiles(shares, safePath) {
       }
     },
 
+    // Every file in every available share, as the caller may see it: the index behind Photos, Videos,
+    // Other and the Dashboard (milestone 6). One walk per share, kept for INDEX_TTL and dropped early by
+    // forget() after an upload, so a large share isn't re-walked on every tab switch. Same rules as a
+    // listing: no links or junctions, no uploads in flight, no names the API couldn't address again.
+    async index(view) {
+      const out = [];
+      let generatedAt = Date.now();
+      for (const share of shares) {
+        let entry = indexCache.get(share.id);
+        if (!entry || Date.now() - entry.at > INDEX_TTL) {
+          entry = { at: Date.now(), files: await walkShare(share) };
+          indexCache.set(share.id, entry);
+        }
+        generatedAt = Math.min(generatedAt, entry.at);
+        for (const f of entry.files) {
+          if (!view.fileVisible(share.id, f.rel)) continue;
+          const i = f.rel.lastIndexOf('/');
+          const rec = view.recordOf(share.id, f.rel);
+          out.push({ id: fileId(share.id, f.rel), kind: 'file', share: share.id, path: i < 0 ? '' : f.rel.slice(0, i), name: f.rel.slice(i + 1),
+            size: f.size, modifiedAt: f.modifiedAt, ownerId: rec.ownerId, uploadedBy: rec.uploadedBy });
+        }
+      }
+      return { generatedAt: new Date(generatedAt).toISOString(), entries: out };
+    },
+    forget(shareId) { if (shareId) indexCache.delete(shareId); else indexCache.clear(); },
+
     // Size of each file that still exists, for revoke and restore figures. Missing ones are skipped.
     async sizes(keys) {
       let count = 0, bytes = 0;
@@ -182,4 +246,4 @@ function parseRange(header, size) {
   return { start, end };
 }
 
-module.exports = { createFiles, parseRange, fileId, FileError };
+module.exports = { createFiles, parseRange, fileId, FileError, INLINE };

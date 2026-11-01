@@ -2,7 +2,7 @@
 
 The server that runs on the HP laptop. Built one milestone at a time from `docs/PHASE-1C.md`.
 
-**Now: milestones 1–5.** Core Node only, no install step. It serves `ui/` as static files, answers `GET /api/shares` with the real drives read from disk, owns accounts, passwords and sessions, lets the Files tab browse, download and upload real folders, and enforces who owns what. Photos, Videos, Other, the Dashboard figures, devices and transfers in `ui/js/api.js` still run on mock data.
+**Now: milestones 1–6, the whole brief.** Core Node only, no install step. It serves `ui/`, reports the real drives, owns accounts, passwords and sessions, browses, downloads and uploads real folders, enforces who owns what, and indexes every share for Photos, Videos, Other and the Dashboard. The browser's file mock is gone; only Devices and Transfers keep sample data, until Phase 2.
 
 ## Run it
 
@@ -91,9 +91,28 @@ The 2 GB test in `files.test.js` builds a 2 GB file in a temporary share and dow
 | `POST /api/accounts/:id/remove` | master | `{ custodianId }`: files to the custodian, every claim cleared |
 | `POST /api/files/keep` | master | `{ ids }`: end the uploader's claim |
 
-The Files tab has an Upload button for every account (the Dashboard's upload panel is master-only). Photos, Videos, Other and the Dashboard figures still read the mock index until milestone 6; until then the revoke and restore figures add the real files and the mock ones together.
+The Files tab has an Upload button for every account (the Dashboard's upload panel is master-only).
 
 `ownership.test.js` covers the three Phase 1C acceptance checks and the Phase 1B ownership checks against a real server, including a restart.
+
+## Index, previews and shares (milestone 6)
+
+The last of the file mock is gone from `ui/`: Photos, Videos, Other, the Dashboard, device file totals and Settings all read the server.
+
+- **The index** (`GET /api/files`) is every file in every available share, scoped by ownership like everything else. One walk per share is reused for 30 seconds and dropped after an upload; the Dashboard's Refresh, and `?fresh=1`, walk again so files added in Explorer appear. It walks one folder at a time and skips links, junctions, uploads in flight and unaddressable names, the same rules as a listing. Past 200,000 files in a share it stops: that is the point where the brief's SQLite index is due.
+- **Previews** (`?inline=1` on a file) serve photos, video and audio as their own type, so the Photos grid, the viewer and the players show the real thing. Only an allowlist of media types is served in place, never SVG, HTML or PDF, and every file response carries `nosniff` and a sandboxing content security policy. Previews are full images; resized thumbnails would need an image library, which the brief keeps out for now.
+- **Shares** are added, edited and removed from Settings (`POST /api/shares`, `PUT` and `DELETE /api/shares/:id`, master only). The change is written to `config.json` before it takes effect, and port and host are left alone. A drive root, a relative or network path, and a folder inside (or around) another share are refused. Editing keeps the share's id, so ownership records still match. Removing a share never touches the disk.
+- **Drive figures** say which drive each share is on (`drive`), so two shares on one drive count its capacity once. The Dashboard shows the drives' real used and free space, the files in the shares by type, and the rest of the used space as "other data on the drives".
+
+| Route | Who | Does |
+| --- | --- | --- |
+| `GET /api/files` | signed in | Every file the caller may see, across all shares |
+| `GET /api/shares/:id/file?path=&inline=1` | signed in | A photo, video or audio file shown in place |
+| `POST /api/shares` | master | Add a share |
+| `PUT /api/shares/:id` | master | Rename it, point it elsewhere, change its drive type |
+| `DELETE /api/shares/:id` | master | Stop serving it |
+
+`index.test.js` covers the index, previews and share editing, including a restart.
 
 ## Rules that carry over
 
