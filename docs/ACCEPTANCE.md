@@ -126,7 +126,18 @@ The HP's half (the discovery responder) was built and merged in pull request #5.
 
 Tests: `node --test "agent/*.test.js"` (9 tests) and `node --test "server/*.test.js"` (83 tests, unchanged), all passing.
 
-**To finish 2-1 on the real HP:** pull `main` on the HP and restart the server, so `/api/hello` and discovery are running. Make sure Windows Firewall on the HP allows inbound **UDP 41980** and **TCP 8080** on the Private profile. Then start the tool on the Acer. It should find the HP without an address being typed.
+**Against the real HP (2 Nov 2026).** The HP (DESKTOP-UL55ECB) is at 192.168.1.12, on the same Wi-Fi and access point as the Acer, with its firewall correct.
+
+- ✅ **The tool opens the real HP:** from a remembered or typed address it opened `http://192.168.1.12:8080/` in 0.6 s, confirmed the `serverId` and showed the HP's sign-in screen.
+- ✅ **A discovery request sent directly to 192.168.1.12** gets the right answer: `Found DESKTOP-UL55ECB → http://192.168.1.12:8080`.
+- ❌ **Discovery by broadcast fails, because the HP doesn't receive broadcasts from the Acer.** Neither the subnet broadcast nor `255.255.255.255` arrives. The same goes for the Acer's ARP lookups: until the HP contacted the Acer first, the Acer reported the HP as "Destination host unreachable". Other devices on the Wi-Fi answer the Acer's broadcasts, so this is specific to the HP. The likely cause is Wi-Fi power saving on the HP's adapter ("Wi-Fi 2"), which makes it miss broadcast frames.
+
+So the check "a new device finds the HP without an IP address being typed" is waiting on the HP's network, not on Attic. Fixes, on the HP:
+1. Device Manager → Network adapters → the Wi-Fi adapter → Power Management: untick "Allow the computer to turn off this device". On the Advanced tab, set any power-saving option (MIMO power save, packet coalescing) to off or maximum performance.
+2. Control Panel → Power Options → plan settings → Wireless Adapter Settings → Maximum Performance.
+3. Or, best for an always-on server: connect the HP to the router by Ethernet.
+
+Then `node server/find-server.js` on the Acer should find the HP without its address.
 
 ## Problems found and fixed during the run
 
