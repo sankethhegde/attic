@@ -1,9 +1,9 @@
 // api.js — the ONLY module that touches storage. No screen reads localStorage or calls fetch.
 // Every function returns a promise and every one can fail.
 //
-// Phase 1C: accounts, passwords and sessions are the HP server's (milestone 3), and so are the share
-// figures (milestone 1). Files, devices, transfers and ownership are still the browser mock, reading the
-// signed-in session and the account list the server returned.
+// Phase 1C: accounts, passwords, sessions, shares, files and ownership are the HP server's. Phase 2, 2-2:
+// pairing and the device list are too. Transfers (and the sample devices they name) are still a browser
+// mock until 2-4 and 2-5.
 (function (root) {
   'use strict';
   const U = root.Attic.util;
@@ -52,6 +52,11 @@
     const data = await res.json().catch(() => null);
     if (!res.ok) {
       if (res.status === 401 && url !== '/api/session') { me = null; known = []; }
+      // Unpaired on the HP (Phase 2, 2-2): the app goes back to the pairing screen.
+      if (res.status === 403 && data && data.code === 'NOT_PAIRED') {
+        me = null; known = [];
+        root.dispatchEvent(new CustomEvent('attic:not-paired'));
+      }
       throw new ApiError((data && data.code) || 'SERVER', (data && data.message) || 'Something went wrong on the server.');
     }
     return data;
@@ -227,6 +232,18 @@
     ApiError,
     MAX_CUSTOM_BG,
     MAX_BG_BYTES,
+
+    // ---------- pairing (the HP's: Phase 2, 2-2) ----------
+    // Whether this device may use the HP: { required, paired, thisPC, device }. Answered before sign-in.
+    async getPairing() {
+      return http('GET', '/api/pairing');
+    },
+
+    // Trade the code the master was shown for this device's identity. The HP keeps the token in an
+    // HttpOnly cookie, so nothing here ever sees it.
+    async claimPairing({ code, name, kind, os }) {
+      return (await http('POST', '/api/pairing/claim', { code: String(code || ''), name: String(name || '').trim(), kind, os: os || null })).device;
+    },
 
     // ---------- first run ----------
     async needsSetup() {
@@ -461,10 +478,29 @@
       };
     },
 
-    // ---------- hub: devices and transfers (mock until Phase 2) ----------
-    // Every signed-in account sees which devices exist and whether they're online; only the master sees
-    // their system stats. In Phase 2 these become WebSocket updates from each device's agent.
+    // ---------- hub: devices (the HP's paired devices: 2-2) ----------
+    // Everyone signed in sees which devices exist and whether they're online; the master also sees when
+    // each was paired and its last address. Live stats arrive with the agent in 2-3, so `stats` is null.
     async listHubDevices() {
+      const list = await http('GET', '/api/devices');
+      return list.map(d => ({ id: d.id, name: d.name, role: d.role, os: d.os || '', kind: d.kind, online: !!d.online,
+        lastSeenAt: d.lastSeenAt, thisPC: !!d.thisPC, browserOnly: d.kind === 'phone' || d.kind === 'tablet', stats: null,
+        pairedAt: d.pairedAt || null, lastAddress: d.lastAddress || null }));
+    },
+
+    // Unpair (master): the device's token stops working and everyone signed in on it is signed out.
+    async unpairHubDevice(id) {
+      return http('DELETE', '/api/devices/' + encodeURIComponent(id), {});
+    },
+
+    // One-time pairing codes (master). Issuing a code is the approval for one new device.
+    async listPairCodes() { return http('GET', '/api/pairing/codes'); },
+    async createPairCode() { return http('POST', '/api/pairing/codes', {}); },
+    async cancelPairCode(id) { return http('DELETE', '/api/pairing/codes/' + encodeURIComponent(id), {}); },
+
+    // ---------- hub: transfers (mock until 2-4 and 2-5) ----------
+    // The sample devices the mock transfers name, so the Transfers view can label them.
+    async listTransferDevices() {
       await delay(true);
       const session = sessionOrThrow();
       const hub = hubData();

@@ -37,6 +37,8 @@
           <div class="ctl"><input class="plain-input" id="dname" value="${U.esc(acc.displayName)}" maxlength="40" style="width:240px"></div></div>
         <div class="set-row"><div class="lbl">Username<small>Used to sign in. It can’t be changed.</small></div><div class="ctl mono">@${U.esc(acc.username)}</div></div>
         <div class="set-row" style="display:block"><div class="lbl" style="margin-bottom:10px">This device<small>Detected automatically. Correct it if the guess is wrong — it’s remembered in this browser.</small></div><div id="this-device"></div></div>
+        <div class="set-row"><div class="lbl">Paired with the HP as<small>The master can unpair a device from the Devices tab.</small></div>
+          <div class="ctl" id="paired-as"><span class="skel" style="display:inline-block;width:140px;height:14px"></span></div></div>
         <div class="set-row"><div class="lbl">Password</div><div class="ctl"><button class="btn btn-secondary btn-sm" id="chpass">${U.icon('lock')}Change password</button></div></div>
         <div class="set-row"><div class="lbl">Sign out<small>${state.session.persistent ? 'You’re set to stay signed in on this browser for 30 days.' : 'Your session ends when this tab closes.'}</small></div>
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="signout">${U.icon('logout')}Sign out</button></div></div>
@@ -98,6 +100,12 @@
     main.querySelectorAll('[data-psize]').forEach(b => b.onclick = async () => { press('psize', b.dataset.psize); await save({ photoSize: b.dataset.psize }, 'Thumbnail size saved'); });
     background.renderPicker(main.querySelector('#picker'));
     root.Attic.device.field(main.querySelector('#this-device'));
+    const pairedAs = main.querySelector('#paired-as');
+    api.getPairing().then(p => {
+      pairedAs.innerHTML = p.thisPC ? '<span><b>The HP itself</b> · no pairing needed</span>'
+        : p.device ? `<span><b>${U.esc(p.device.name)}</b></span>`
+        : `<span class="muted">${p.required ? 'Not paired' : 'Pairing is off on the HP'}</span>`;
+    }).catch(() => { pairedAs.innerHTML = '<span class="muted">Not known</span>'; });
 
     // Desktop tool only: which HP this tool is talking to, and a way to pick another (Phase 2, 2-1).
     const srvNow = main.querySelector('#srv-now');

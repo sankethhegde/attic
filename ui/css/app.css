@@ -647,6 +647,23 @@ h1, h2, h3 { margin: 0; }
 .dev-note .ic { width: 16px; height: 16px; flex: none; margin-top: 2px; }
 .hub-actions { margin-top: auto; display: flex; gap: 8px; }
 .hub-actions .tip { flex: 0 0 auto; }
+.hub-actions [data-unpair] { margin-left: auto; color: var(--danger); }
+.hub-empty { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding: 14px 16px; border: 1.5px dashed var(--line); border-radius: 14px; color: var(--muted); font-size: 14px; }
+.hub-empty .ic { flex: none; color: var(--accent); }
+.hub-empty b { color: var(--ink); }
+
+/* ---------- pairing (2-2) ---------- */
+.pair-code input { font-family: var(--mono); font-size: 22px; font-weight: 700; letter-spacing: 4px; }
+.pair-code-big { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 84px; padding: 14px 12px; border-radius: 14px; background: var(--field); margin-bottom: 10px; }
+.pair-code-big .digits { font-family: var(--mono); font-size: 40px; font-weight: 800; letter-spacing: 6px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.pair-code-big .spinner { color: var(--accent); }
+.pair-code-meta { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+.pair-code-meta .grow { flex: 1; }
+.pair-wait { display: flex; align-items: flex-start; gap: 10px; font-size: 13.5px; color: var(--muted); padding: 8px 0 0; }
+.pair-wait .ic { flex: none; width: 18px; height: 18px; color: var(--accent); margin-top: 1px; }
+.pair-done { display: flex; align-items: center; gap: 14px; padding: 12px 0; }
+.pair-done .c { font-size: 13px; color: var(--muted); margin-top: 2px; }
+@media (max-width: 420px) { .pair-code-big .digits { font-size: 32px; letter-spacing: 4px; } }
 .tr-list { display: grid; gap: 8px; }
 .tr-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto auto; gap: 12px; align-items: center; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 14px; padding: 12px 14px; }
 .tr-icon { display: grid; place-items: center; }

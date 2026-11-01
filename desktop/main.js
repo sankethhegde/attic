@@ -1,9 +1,16 @@
 // Attic Hub desktop shell. Phase 2, milestone 2-1: on start it finds the HP on the home network
 // (agent/connect.js), shows a "Looking for server" screen meanwhile, and then opens the interface the HP
 // serves, so sign-in and every file call go to the real server. A typed address is the fallback.
+// Pairing (2-2) happens in that interface; the HP keeps this PC's device token in a cookie, which the
+// window's session stores across restarts.
 // Tray, notifications, Explorer integration and Server/Client mode arrive in later phases.
 const { app, BrowserWindow, Menu, shell, ipcMain } = require('electron');
 const path = require('path');
+const os = require('os');
+
+// What the pairing screen (2-2) suggests for this PC: its name, and Windows 10 or 11 (build 22000 and up).
+const HOSTNAME = os.hostname().slice(0, 64);
+const OS_NAME = process.platform === 'win32' ? (Number(os.release().split('.')[2]) >= 22000 ? 'Windows 11' : 'Windows 10') : os.type();
 
 // Packaged builds carry ui/, agent/ and server/discovery.js inside the app; in development they sit
 // next to desktop/.
@@ -145,7 +152,7 @@ function createWindow() {
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      additionalArguments: ['--attic-version=' + app.getVersion()],
+      additionalArguments: ['--attic-version=' + app.getVersion(), '--attic-host=' + encodeURIComponent(HOSTNAME), '--attic-os=' + encodeURIComponent(OS_NAME)],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -154,6 +161,11 @@ function createWindow() {
   });
 
   win.once('ready-to-show', () => win.show());
+
+  // The HP's device cookie (2-2) is this PC's pairing. Write it to disk as soon as it arrives or changes,
+  // so a crash or power cut straight after pairing doesn't lose it.
+  const cookies = win.webContents.session.cookies;
+  cookies.on('changed', (_e, cookie) => { if (cookie.name === 'attic_device') cookies.flushStore().catch(() => {}); });
   win.loadFile(CONNECT_PAGE);
 
   // The window shows only the start screen and the confirmed server's pages. Anything else (the

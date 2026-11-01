@@ -180,5 +180,89 @@
     };
   }
 
-  root.Attic.login = { renderSetup, renderLogin };
+  // ---------- pairing (Phase 2, 2-2) ----------
+  // A device the HP doesn't know yet trades a one-time code, issued by the master on the HP, for its
+  // identity. The HP keeps that identity in an HttpOnly cookie; after this the device signs in as usual.
+  function osGuess() {
+    const ua = root.navigator.userAgent || '';
+    if (/iPhone|iPod/.test(ua)) return 'iOS';
+    if (/iPad/.test(ua) || (/Macintosh/.test(ua) && root.navigator.maxTouchPoints > 1)) return 'iPadOS';
+    if (/Android/.test(ua)) return 'Android';
+    if (/Windows/.test(ua)) return 'Windows';
+    if (/Mac OS X/.test(ua)) return 'macOS';
+    if (/CrOS/.test(ua)) return 'ChromeOS';
+    return /Linux/.test(ua) ? 'Linux' : '';
+  }
+  function defaultName(type) {
+    const desk = root.atticDesktop;
+    if (desk && desk.hostname) return desk.hostname;
+    const os = osGuess();
+    if (os === 'iOS') return 'iPhone';
+    if (os === 'iPadOS') return 'iPad';
+    return (os ? os + ' ' : '') + (root.Attic.device.LABEL[type] || 'device').toLowerCase();
+  }
+
+  function renderPair(app, done, opts) {
+    opts = opts || {};
+    app.innerHTML = `<div class="stage" id="stage">
+      <form class="login-card" novalidate aria-labelledby="pr-title">
+        ${ui.brand()}
+        <h1 id="pr-title">Pair this device</h1>
+        <p class="sub">On the HP, the master opens <b>Devices → Pair a device</b> and gets a 6-digit code. Type it here. Each device needs this once.</p>
+        ${opts.unpaired ? `<div class="banner banner-warning" role="status">${U.icon('alert')}<span>This device was unpaired on the HP. Ask for a new code to keep using Attic here.</span></div>` : ''}
+        <div class="field pair-code" data-field="pr-code">
+          ${U.icon('lock')}
+          <input id="pr-code" type="text" placeholder=" " inputmode="numeric" autocomplete="one-time-code" maxlength="7" spellcheck="false" aria-describedby="pr-code-msg">
+          <label for="pr-code">Pairing code</label>
+          <div class="field-msg" id="pr-code-msg" aria-live="polite"></div>
+        </div>
+        ${field({ id: 'pr-name', label: 'Name for this device', icon: 'monitor' })}
+        <div id="pr-device" class="lg-device"></div>
+        <button class="btn btn-primary btn-block" type="submit" style="height:48px">Pair</button>
+        <div class="form-error" id="pr-error" role="alert"></div>
+        ${HTTP_NOTE}
+      </form>
+    </div>`;
+    const stage = app.querySelector('#stage');
+    background.engine.mount(stage);
+    const form = stage.querySelector('form');
+    const code = form.querySelector('#pr-code'), name = form.querySelector('#pr-name');
+    wireEyes(form);
+    let kind = 'desktop', nameTouched = false;
+    name.addEventListener('input', () => { nameTouched = true; });
+    const setKind = d => { kind = d.type; if (!nameTouched) name.value = defaultName(kind); };
+    root.Attic.device.field(form.querySelector('#pr-device'), { compact: true, onChange: async () => setKind(await root.Attic.device.current()) }).then(setKind);
+    // Digits only, shown as "482 913" so it's easy to compare with the HP's screen.
+    code.addEventListener('input', () => {
+      const d = code.value.replace(/\D/g, '').slice(0, 6);
+      code.value = d.length > 3 ? d.slice(0, 3) + ' ' + d.slice(3) : d;
+    });
+    code.focus();
+
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const digits = code.value.replace(/\D/g, '');
+      setFieldError(form, 'pr-code', digits.length === 6 ? '' : digits ? 'The code is 6 digits' : 'Enter the code shown on the HP');
+      setFieldError(form, 'pr-name', name.value.trim() ? '' : 'Give this device a name');
+      form.querySelector('#pr-error').textContent = '';
+      if (digits.length !== 6 || !name.value.trim()) { shake(form); (digits.length !== 6 ? code : name).focus(); return; }
+      const btn = form.querySelector('[type=submit]');
+      busy(btn, true);
+      try {
+        const desk = root.atticDesktop;
+        const dev = await api.claimPairing({ code: digits, name: name.value, kind, os: (desk && desk.osName) || osGuess() });
+        await leave(form);
+        ui.toast(`Paired as ${dev.name}`);
+        done(dev);
+      } catch (err) {
+        busy(btn, false, 'Pair');
+        if (err.code === 'BAD_CODE') { setFieldError(form, 'pr-code', err.message); code.select(); code.focus(); }
+        else if (err.code === 'INVALID') { setFieldError(form, 'pr-name', err.message); name.focus(); }
+        else form.querySelector('#pr-error').innerHTML = U.icon('alertCircle') + `<span>${U.esc(err.message)}</span>`;
+        shake(form);
+      }
+    };
+  }
+
+  root.Attic.login = { renderSetup, renderLogin, renderPair };
 })(window);

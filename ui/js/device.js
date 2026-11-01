@@ -85,7 +85,7 @@
     </div>`;
     host.querySelector('.dev-change').onclick = (e) => {
       const btn = e.currentTarget;
-      ui.menu(btn, `${['phone', 'tablet', 'laptop', 'desktop'].map(t => `<button class="menu-item" role="menuitemradio" aria-checked="${d.type === t}" data-t="${t}">
+      ui.menu(btn, `${['phone', 'tablet', 'laptop', 'desktop', 'handheld'].map(t => `<button class="menu-item" role="menuitemradio" aria-checked="${d.type === t}" data-t="${t}">
           <span style="display:inline-flex;width:28px">${art(t, 28)}</span>${LABEL[t]}${d.type === t ? `<span style="margin-left:auto;color:var(--accent)">${U.icon('check')}</span>` : ''}</button>`).join('')}
         <div class="menu-sep"></div><button class="menu-item" role="menuitem" data-t="">${U.icon('refresh')}Detect automatically${d.override ? '' : ' (on)'}</button>`,
       (m, close) => m.querySelectorAll('[data-t]').forEach(b => b.onclick = async () => {

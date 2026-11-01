@@ -2,12 +2,18 @@
 // and (Phase 2, 2-1) lets the start screen drive the search for the HP and Settings show or change it.
 const { contextBridge, ipcRenderer } = require('electron');
 
-const arg = (process.argv.find(a => a.startsWith('--attic-version=')) || '').split('=')[1];
+const arg = name => {
+  const a = process.argv.find(x => x.startsWith(`--attic-${name}=`));
+  try { return a ? decodeURIComponent(a.slice(name.length + 9)) : null; } catch (e) { return null; }
+};
 
 contextBridge.exposeInMainWorld('atticDesktop', {
   isDesktop: true,
-  version: arg || null,
+  version: arg('version'),
   platform: process.platform,
+  // Suggested on the pairing screen (2-2): this PC's name and Windows version.
+  hostname: arg('host'),
+  osName: arg('os'),
   // The start screen: follow the search, retry it, pick a server, or type an address.
   hub: {
     onState: cb => { ipcRenderer.on('hub:state', (_e, s) => cb(s)); },
