@@ -139,6 +139,29 @@ So the check "a new device finds the HP without an IP address being typed" is wa
 
 Then `node server/find-server.js` on the Acer should find the HP without its address.
 
+**Re-run, 2 Nov 2026 (evening): ✅ discovery by broadcast now finds the real HP.** `node server/find-server.js` on the Acer, with no address given, answered `Found DESKTOP-UL55ECB → http://192.168.1.12:8080`. The desktop tool found it too, during `discovery-test.mjs`. So "A new device finds the HP without an IP address being typed" passes on the real network.
+
+`discovery-test.mjs` now allows for the real HP being on the network. When two servers answer, the tool rightly asks which one, and the test picks its throwaway server. When the throwaway server stops, the tool moves to the only other Attic server, and the test returns to the start screen for the typed-address checks.
+
+## Phase 2, milestone 2-2: pairing and unpairing, the Acer's half (2 Nov 2026)
+
+The HP's half (codes, claim, device identity, unpairing) was built and merged in pull request #7. This is the interface's half, built against it. The HP's design replaced the one the Acer first drafted: issuing a code is the approval, and the device token is an HttpOnly cookie.
+
+| Check | Result | How it was verified |
+| --- | --- | --- |
+| "Pair a device" works (D-02) | ✅ | Master only. It shows the HP's code in large digits with a 10-minute countdown, Copy and New code. It notices when the code is used ("ROG Ally is paired"), and closing it unused cancels the code on the HP |
+| Code entry screen | ✅ | An unpaired device sees "Pair this device" before setup or sign-in. The name defaults to the PC's name (`Sanks-World`), and the device type uses the 1A detection. A wrong code shows the HP's reason, and the right one moves on to sign-in |
+| Unpair button on a device card (D-11) | ✅ | Master only, not on the HP. It asks first, and warns when it's the device you're using. The device is removed on the HP |
+| An unpaired device cannot list files or devices (Phase 2 check) | ✅ | `GET /api/files` from an unpaired address → `403`. Unpaired while in use, the tool goes back to "Pair this device" with the reason |
+| Pairing survives a restart | ✅ | The cookie is written to disk as soon as it arrives. The first run showed that a hard kill straight after pairing could lose it |
+| The token never reaches the page | ✅ | `attic_device` is HttpOnly and absent from `document.cookie` |
+| Devices view on real data | ✅ | `/api/devices`: the HP plus each paired device, with "This device", online or last seen, and the last address and pairing date for the master. Live stats wait for 2-3; Transfers keeps sample data until 2-4 |
+| 360px, no horizontal scrolling | ✅ | Devices and the Pair a device dialog |
+
+Tests: `pairing-test.mjs` 19/19, `discovery-test.mjs` 13/13, `smoke-test.mjs` (10 views, 0 console errors), and `node --test "server/*.test.js"` 98/98. Fixed during the run: the dialog could take an existing device for the new one if opened before the list loaded, and deletes need a JSON body to pass the server's CSRF check.
+
+Still to do with the real machines: pair the Acer with the real HP (the master issues the code on the HP), then the ROG Ally.
+
 ## Problems found and fixed during the run
 
 1. **Focus after navigation:** after opening a folder or tab, keyboard focus fell back to the top of the page, so you had to Tab through the header again. It now moves into the new content.

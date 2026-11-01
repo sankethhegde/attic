@@ -21,7 +21,9 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail }); 
 // ---- a throwaway server ----
 fs.mkdirSync(path.join(tmp, 'share'), { recursive: true });
 fs.writeFileSync(path.join(tmp, 'share', 'hello.txt'), 'hi');
-fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({ port: HTTP_PORT, host: '0.0.0.0',
+// Pairing (2-2) is off here: the tool may reach this server through the PC's network address, and this
+// test is about finding it. scripts/pairing-test.mjs covers pairing.
+fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({ port: HTTP_PORT, host: '0.0.0.0', pairing: { required: false },
   shares: [{ id: 'main', name: 'Test share', rootPath: path.join(tmp, 'share'), deviceType: 'hdd' }] }));
 let server = null;
 function startServer() {
@@ -83,8 +85,16 @@ try {
   await launchTool();
   const started = await waitFor(`location.protocol === 'file:' && document.querySelector('h1') && document.querySelector('h1').textContent`, 5000);
   check('start screen shows while searching', started, started || '');
+  // If a real HP is on the network too, the tool rightly asks which one; pick the throwaway server.
+  let others = 0;
+  const first = await waitFor(`(location.protocol === 'http:' && location.port === '${HTTP_PORT}' && 'opened') || (document.querySelector('[data-id="${hello.serverId}"]') && 'choose:' + document.querySelectorAll('.connect-choice').length)`, 20000);
+  if (first && first.startsWith('choose:')) {
+    others = Number(first.split(':')[1]) - 1;
+    await ev(`document.querySelector('[data-id="${hello.serverId}"]').click(); return 1`);
+  }
   const opened = await waitFor(`location.protocol === 'http:' && location.port === '${HTTP_PORT}' && location.href`);
-  check('finds the server by itself and opens its interface', opened, opened || 'never left the start screen');
+  check('finds the server by itself and opens its interface', opened,
+    opened ? opened + (others ? ` (chosen from a list: ${others} other server${others === 1 ? '' : 's'} answered too)` : '') : 'never left the start screen');
   const remembered = JSON.parse(fs.readFileSync(path.join(profile, 'server.json'), 'utf8'));
   check('remembers the server by its id', remembered.serverId === hello.serverId, `${remembered.name} ${remembered.address}:${remembered.port}`);
 
@@ -105,8 +115,15 @@ try {
   await waitHttp(false);
   const lost = await waitFor(`location.protocol === 'file:' && document.querySelector('#c-title') && /Can’t reach|Reconnecting|No Attic/.test(document.querySelector('#c-title').textContent) && document.querySelector('#c-title').textContent`, 50000);
   check('notices the server is gone and shows the start screen', lost, lost || 'stayed on the dead page');
-  const notFound = await waitFor(`document.querySelector('#c-retry') && document.querySelector('#c-title').textContent`, 20000);
-  check('ends on a not-found screen with Search again', notFound, notFound);
+  // With a real HP on the network, the search finds it instead and opens it; that's right too. Change
+  // server then brings the start screen back for the typed-address checks.
+  const notFound = await waitFor(`(location.protocol === 'file:' && document.querySelector('#c-retry') && document.querySelector('#c-title').textContent)
+    || (location.protocol === 'http:' && location.port !== '${HTTP_PORT}' && 'moved to the other server at ' + location.host)`, 20000);
+  check('ends on a not-found screen with Search again, or on the only other server', notFound, notFound);
+  if (String(notFound).startsWith('moved')) {
+    await ev(`atticDesktop.server.change(); return 1`);
+    await waitFor(`location.protocol === 'file:' && document.querySelector('#c-go') && !document.querySelector('#c-go').disabled`, 20000);
+  }
 
   // 4. A wrong typed address explains itself; a right one connects.
   await ev(`const a = document.querySelector('#c-addr'); a.value = '127.0.0.1:1'; document.querySelector('#c-form').requestSubmit(); return 1`);

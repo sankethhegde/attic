@@ -18,12 +18,17 @@ While the interface is open, the tool asks the HP `/api/hello` every 15 seconds.
 
 Tests: `node --test "agent/*.test.js"` (the logic, offline), and `desktop/scripts/discovery-test.mjs`. The second runs the whole flow in the real tool against a throwaway copy of the server.
 
+## Pairing (milestone 2-2, D-02 and D-11) — built
+
+Pairing happens in the interface the HP serves, not here, so browsers and the iPhone get the same screen. The interface checks `GET /api/pairing` before setup or sign-in. If the device isn't paired, it shows "Pair this device", which sends the master's one-time code to `POST /api/pairing/claim`. The routes are in [server/README.md](../server/README.md#pairing-and-unpairing-phase-2-milestone-2-2-d-02-and-d-11).
+
+The device token arrives as an `HttpOnly` cookie in the window's session. The desktop tool writes it to disk as soon as it changes (`desktop/main.js`), so a crash straight after pairing doesn't lose it. In 2-3 the background part reads it from Electron's cookie store and sends it as `X-Attic-Device`.
+
+Tests: `desktop/scripts/pairing-test.mjs`. It runs the real tool against a throwaway server with pairing required, reaching it through this PC's network address so the server treats the tool as a new device.
+
 ## Still to come
 
-- **2-2 Pairing:** a one-time code approved on the HP, instead of signing in as a device account.
 - **2-3 Live stats:** the `systeminformation` npm package, over a WebSocket to the HP.
 - **2-4 Hub Inbox:** receiving files sent from other devices.
 
-**Pairing is ready on the HP** (Phase 2, 2-2): the HP answers `403 NOT_PAIRED` to any device the master hasn't approved. The client's half is to check `GET /api/pairing` after connecting, ask for the code the HP shows, and send it to `POST /api/pairing/claim`. The routes are in [server/README.md](../server/README.md#pairing-and-unpairing-phase-2-milestone-2-2-d-02-and-d-11). The device token arrives as an `HttpOnly` cookie in the window's session, so the background part reads it from Electron's cookie store and sends it as `X-Attic-Device`.
-
-The Devices and Transfers views in `ui/` show sample data from `ui/js/mockgen.js` until then. The agent has to produce the same shapes.
+The Transfers view in `ui/` shows sample data from `ui/js/mockgen.js` until then. The agent has to produce the same shapes.
