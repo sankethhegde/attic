@@ -1,11 +1,11 @@
 // Devices view (Attic Hub): a card per device paired with the HP (Phase 2, 2-2). The master pairs new
-// devices with a one-time code and unpairs old ones. Live stats come from each device's agent in 2-3;
-// until then the cards show status and last seen only. Send-to-device arrives in 2-4, so its button is
-// present but disabled, and the layout doesn't change when it arrives.
+// devices with a one-time code and unpairs old ones. It's live (2-3): one WebSocket to the HP brings each
+// device's stats as its agent reports them, and who comes and goes. Send-to-device arrives in 2-4, so its
+// button is present but disabled, and the layout doesn't change when it arrives.
 (function (root) {
   'use strict';
   const { util: U, api, ui } = root.Attic;
-  const POLL_MS = 3000;
+  const POLL_MS = 5000; // only while the live connection is down
 
   function meter(label, icon, valueText, pct, cls) {
     return `<div class="stat">
@@ -15,14 +15,21 @@
   }
 
   function statsHTML(d, master) {
-    if (d.browserOnly) return `<p class="dev-note">${U.icon('info')}<span>A phone or tablet can’t report system stats from its browser, so only connection status is shown.</span></p>`;
-    if (!d.online) return `<p class="dev-note">${U.icon('cloudOff')}<span>Offline. It shows as online again when it next talks to the HP.</span></p>`;
-    if (!master) return `<p class="dev-note">${U.icon('lock')}<span>System stats are visible to the master account.</span></p>`;
-    const s = d.stats;
-    if (!s) return `<p class="dev-note">${U.icon('info')}<span>Live CPU, RAM, disk and battery figures arrive with the device agent in the next milestone (2-3).</span></p>`;
+    const phone = d.kind === 'phone' || d.kind === 'tablet';
+    if (d.browserOnly && phone) return `<p class="dev-note">${U.icon('info')}<span>A phone or tablet can’t report system stats from its browser, so only connection status is shown.</span></p>`;
+    if (!master) return d.online ? `<p class="dev-note">${U.icon('lock')}<span>System stats are visible to the master account.</span></p>`
+      : `<p class="dev-note">${U.icon('cloudOff')}<span>Offline. It shows as online again when it next talks to the HP.</span></p>`;
+    if (d.browserOnly) return `<p class="dev-note">${U.icon('info')}<span>No stats yet. They appear once Attic Hub 0.5 or later is running on it.</span></p>`;
+    if (!d.online && d.lastStats) return meters(d.lastStats, true) + `<p class="dev-note">${U.icon('cloudOff')}<span>Offline. Last reported ${U.relDate(d.statsAt)}.</span></p>`;
+    if (!d.online) return `<p class="dev-note">${U.icon('cloudOff')}<span>Offline. Stats return when it reconnects.</span></p>`;
+    if (!d.stats) return `<p class="dev-note"><span class="spinner" aria-hidden="true"></span><span>Waiting for its first report…</span></p>`;
+    return meters(d.stats, false);
+  }
+
+  function meters(s, stale) {
     const ramPct = U.pct(s.ramUsed, s.ramTotal), diskUsedPct = U.pct(s.diskTotal - s.diskFree, s.diskTotal);
     const level = p => p >= 90 ? 'crit' : p >= 80 ? 'warn' : '';
-    return `<div class="stats">
+    return `<div class="stats${stale ? ' stale' : ''}">
       ${meter('CPU', 'cpu', `<span class="mono">${s.cpu}%</span>`, s.cpu, level(s.cpu))}
       ${meter('RAM', 'memory', `<span class="mono">${U.formatBytes(s.ramUsed)}</span> of <span class="mono">${U.formatBytes(s.ramTotal)}</span>`, ramPct, level(ramPct))}
       ${meter('Disk', 'hdd', `<span class="mono">${U.formatBytes(s.diskFree)}</span> free`, diskUsedPct, level(diskUsedPct))}
@@ -34,7 +41,9 @@
 
   function cardHTML(d, master) {
     const art = root.Attic.device.art(d.kind, 64);
-    const where = master && d.lastAddress ? ` · <span class="mono">${U.esc(d.lastAddress.replace(/^::ffff:/, ''))}</span>` : '';
+    const addr = master && (d.ip || d.lastAddress);
+    const conn = d.connection === 'ethernet' ? `${U.icon('ethernet')}Ethernet` : d.connection === 'wifi' ? `${U.icon('wifi')}Wi-Fi` : '';
+    const where = (conn || addr) ? `<span class="conn-inline">${conn}${conn && addr ? ' · ' : ''}${addr ? `<span class="mono">${U.esc(addr.replace(/^::ffff:/, ''))}</span>` : ''}</span>` : '';
     return `<article class="hub-card${d.online ? '' : ' offline'}" data-id="${U.esc(d.id)}" aria-label="${U.esc(d.name)}, ${d.online ? 'online' : 'offline'}">
       <div class="hub-card-top">
         <span class="hub-art">${art}</span>
@@ -46,7 +55,7 @@
       </div>
       <div class="hub-status">
         <span class="dot ${d.online ? 'on' : ''}" aria-hidden="true"></span>
-        <span>${d.online ? 'Online' : 'Offline · last seen ' + U.relDate(d.lastSeenAt)}${where}</span>
+        <span>${d.online ? 'Online' : 'Offline · last seen ' + U.relDate(d.lastSeenAt).toLowerCase()}</span>${where}
         <span class="grow"></span>
         ${master && d.pairedAt ? `<span class="conn" title="Paired ${U.esc(U.absDate(d.pairedAt))}">Paired ${U.relDate(d.pairedAt)}</span>` : ''}
       </div>
@@ -167,11 +176,30 @@
     const master = state.session.type === 'master';
     shell.setLocation('<span class="title">Devices</span>');
     shell.setSearch(null);
-    main.innerHTML = `<div class="page"><div class="page-head"><h1>Devices</h1><span class="muted" id="dcount"></span><span class="grow"></span>
+    main.innerHTML = `<div class="page"><div class="page-head"><h1>Devices</h1><span class="muted" id="dcount"></span>
+        <span class="live-badge" id="live" hidden></span><span class="grow"></span>
         ${master ? `<button class="btn btn-primary btn-sm" id="pair">${U.icon('plus')}Pair a device</button>` : ''}</div>
       <div id="body"></div></div>`;
     const body = main.querySelector('#body');
-    let timer = 0, alive = true, list = [];
+    const liveEl = main.querySelector('#live');
+    let timer = 0, alive = true, list = [], hub = null, isLive = false;
+
+    // Draws the list: the whole grid when devices came or went, otherwise only the cards that changed, so
+    // focus and scroll stay put. A card holding focus waits for the next change.
+    function draw(force) {
+      const online = list.filter(d => d.online).length;
+      main.querySelector('#dcount').textContent = `${online} of ${list.length} online`;
+      const grid = body.querySelector('.hub-grid');
+      const sameSet = grid && grid.children.length === list.length && list.every(d => grid.querySelector(`.hub-card[data-id="${CSS.escape(d.id)}"]`));
+      if (force || !sameSet) body.innerHTML = `<div class="hub-grid">${list.map(d => cardHTML(d, master)).join('')}</div>`
+        + (list.length === 1 && master ? `<div class="hub-empty">${U.icon('device')}<span>Only the HP so far. Use <b>Pair a device</b> to add the Acer, the ROG Ally or a phone.</span></div>` : '');
+      else list.forEach(drawCard);
+    }
+    function drawCard(d) {
+      const old = body.querySelector(`.hub-card[data-id="${CSS.escape(d.id)}"]`);
+      const card = ui.el(cardHTML(d, master));
+      if (old && old.innerHTML !== card.innerHTML && !old.contains(document.activeElement)) old.replaceWith(card);
+    }
 
     async function load(first) {
       let fresh;
@@ -183,20 +211,20 @@
       }
       if (!alive) return;
       list = fresh;
-      const online = list.filter(d => d.online).length;
-      main.querySelector('#dcount').textContent = `${online} of ${list.length} online`;
-      const grid = body.querySelector('.hub-grid');
-      const sameSet = grid && grid.children.length === list.length && list.every(d => grid.querySelector(`.hub-card[data-id="${CSS.escape(d.id)}"]`));
-      if (first || !sameSet) body.innerHTML = `<div class="hub-grid">${list.map(d => cardHTML(d, master)).join('')}</div>`
-        + (list.length === 1 && master ? `<div class="hub-empty">${U.icon('device')}<span>Only the HP so far. Use <b>Pair a device</b> to add the Acer, the ROG Ally or a phone.</span></div>` : '');
-      else list.forEach(d => { // replace only what changed, so focus and scroll stay put
-        const old = body.querySelector(`.hub-card[data-id="${CSS.escape(d.id)}"]`);
-        const card = ui.el(cardHTML(d, master));
-        if (old && old.innerHTML !== card.innerHTML && !old.contains(document.activeElement)) old.replaceWith(card);
-      });
+      draw(first);
       schedule();
     }
-    function schedule() { clearTimeout(timer); if (alive) timer = setTimeout(() => load(false), POLL_MS); }
+    // Polling is the fallback while the live connection is down.
+    function schedule() { clearTimeout(timer); if (alive && !isLive) timer = setTimeout(() => load(false), POLL_MS); }
+
+    function setLive(status) {
+      isLive = status === 'live';
+      liveEl.hidden = false;
+      liveEl.className = 'live-badge' + (isLive ? ' on' : '');
+      liveEl.innerHTML = isLive ? '<span class="dot on" aria-hidden="true"></span>Live' : '<span class="spinner" aria-hidden="true"></span>Reconnecting…';
+      liveEl.title = isLive ? 'Updates arrive as each device reports' : 'The live connection dropped; checking every few seconds meanwhile';
+      if (isLive) clearTimeout(timer); else schedule();
+    }
 
     body.addEventListener('click', e => {
       const b = e.target.closest('[data-unpair]');
@@ -206,8 +234,22 @@
     const pairBtn = main.querySelector('#pair');
     if (pairBtn) pairBtn.onclick = () => pairDialog(() => load(false));
 
-    ctx.cleanup = () => { alive = false; clearTimeout(timer); };
+    ctx.cleanup = () => { alive = false; clearTimeout(timer); if (hub) hub.close(); };
     await load(true);
+    if (!alive) return;
+    hub = api.openHub({
+      onStatus: setLive,
+      onList: fresh => { list = fresh; draw(false); },
+      onChange: d => {
+        const i = list.findIndex(x => x.id === d.id);
+        if (i < 0) { list.push(d); return draw(false); }
+        const wasOnline = list[i].online;
+        list[i] = d;
+        if (wasOnline !== d.online) main.querySelector('#dcount').textContent = `${list.filter(x => x.online).length} of ${list.length} online`;
+        drawCard(d);
+      },
+      onRemoved: id => { list = list.filter(x => x.id !== id); draw(false); }
+    });
   }
 
   root.Attic.devices = { render };

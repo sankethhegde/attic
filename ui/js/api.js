@@ -227,6 +227,14 @@
 
   function matchQuery(name, q) { return !q || name.toLowerCase().includes(q.toLowerCase()); }
 
+  // A device as the HP describes it (GET /api/devices and the live hub), in the shape the views read.
+  function hubDevice(d) {
+    return { id: d.id, name: d.name, role: d.role, os: d.os || '', kind: d.kind, online: !!d.online, lastSeenAt: d.lastSeenAt,
+      thisPC: !!d.thisPC, browserOnly: !!d.browserOnly, connection: d.connection || null, ip: d.ip || null,
+      stats: d.stats || null, statsAt: d.statsAt || null, lastStats: d.lastStats || null,
+      pairedAt: d.pairedAt || null, lastAddress: d.lastAddress || null };
+  }
+
   // =====================================================================
   const api = {
     ApiError,
@@ -478,14 +486,45 @@
       };
     },
 
-    // ---------- hub: devices (the HP's paired devices: 2-2) ----------
-    // Everyone signed in sees which devices exist and whether they're online; the master also sees when
-    // each was paired and its last address. Live stats arrive with the agent in 2-3, so `stats` is null.
+    // ---------- hub: devices (the HP's paired devices: 2-2, live: 2-3) ----------
+    // Everyone signed in sees which devices exist, whether they're online and how they're connected. Only
+    // the master gets stats (null for anyone else), the IP, and when each was paired.
     async listHubDevices() {
-      const list = await http('GET', '/api/devices');
-      return list.map(d => ({ id: d.id, name: d.name, role: d.role, os: d.os || '', kind: d.kind, online: !!d.online,
-        lastSeenAt: d.lastSeenAt, thisPC: !!d.thisPC, browserOnly: d.kind === 'phone' || d.kind === 'tablet', stats: null,
-        pairedAt: d.pairedAt || null, lastAddress: d.lastAddress || null }));
+      return (await http('GET', '/api/devices')).map(hubDevice);
+    },
+
+    // The live Devices view: one WebSocket to the HP. `onList` gets the whole list first, then `onChange`
+    // one device at a time and `onRemoved` an id on unpair. `onStatus` hears 'live' or 'reconnecting'. A
+    // dropped connection is retried; one the HP closes because the session or pairing ended sends the app
+    // back to sign-in or pairing. Returns { close }.
+    openHub({ onList, onChange, onRemoved, onStatus = () => {} }) {
+      let ws = null, closed = false, tries = 0, timer = 0;
+      const connect = () => {
+        if (closed) return;
+        ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/hub`);
+        ws.onmessage = ev => {
+          let m;
+          try { m = JSON.parse(ev.data); } catch (e) { return; }
+          if (m.type === 'devices') { tries = 0; onStatus('live'); onList(m.devices.map(hubDevice)); }
+          else if (m.type === 'device') onChange(hubDevice(m.device));
+          else if (m.type === 'removed') onRemoved(m.id);
+        };
+        ws.onclose = async ev => {
+          if (closed) return;
+          onStatus('reconnecting');
+          if (ev.code === 4001 || ev.code === 1006) {
+            // Ended by the HP, or refused at the door: find out whether it's the session or the pairing.
+            try {
+              const p = await http('GET', '/api/pairing');
+              if (p.required && !p.paired) return root.dispatchEvent(new CustomEvent('attic:not-paired'));
+              if (!(await http('GET', '/api/session'))) { closed = true; return location.reload(); }
+            } catch (e) { /* the HP is unreachable; keep retrying */ }
+          }
+          timer = setTimeout(connect, [1000, 2000, 5000, 10000][Math.min(tries++, 3)]);
+        };
+      };
+      connect();
+      return { close() { closed = true; clearTimeout(timer); if (ws) ws.close(1000); } };
     },
 
     // Unpair (master): the device's token stops working and everyone signed in on it is signed out.

@@ -49,6 +49,8 @@
         <h2 id="h-srv">Server</h2>
         <div class="set-row"><div class="lbl">Connected to<small>The desktop tool finds the HP on your home network by itself, and remembers it for next time.</small></div>
           <div class="ctl" id="srv-now"><span class="skel" style="display:inline-block;width:180px;height:14px"></span></div></div>
+        <div class="set-row"><div class="lbl">Live stats<small>While this PC is paired, the tool sends the HP its CPU, RAM, disk, battery and network every few seconds, for the master’s Devices view.</small></div>
+          <div class="ctl" id="srv-agent"><span class="skel" style="display:inline-block;width:120px;height:14px"></span></div></div>
         <div class="set-row"><div class="lbl">Use another server<small>Search the network again, or type an address. You’ll sign in on the server you pick.</small></div>
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="srv-change">${U.icon('refresh')}Change server</button></div></div>
       </section>` : ''}
@@ -114,6 +116,11 @@
         srvNow.innerHTML = sv
           ? `<span><b>${U.esc(sv.name)}</b> · <span class="mono">${U.esc(sv.address)}:${sv.port}</span></span>`
           : '<span class="muted">Not known</span>';
+        // Phase 2, 2-3: what the live-stats agent is doing.
+        const AGENT = { reporting: 'Sending to the HP', connecting: 'Connecting…', retrying: 'Reconnecting…', unpaired: 'Stopped: this PC was unpaired',
+          replaced: 'Stopped: another copy of the tool took over', stopped: 'Off', off: 'Off: this PC isn’t paired, or it’s the HP itself' };
+        const st = sv && sv.agent || 'off';
+        main.querySelector('#srv-agent').innerHTML = `<span class="${st === 'reporting' ? '' : 'muted'}">${st === 'reporting' ? '<span class="dot on" style="display:inline-block;margin-right:8px"></span>' : ''}${AGENT[st] || st}</span>`;
       }).catch(() => { srvNow.innerHTML = '<span class="muted">Not known</span>'; });
       main.querySelector('#srv-change').onclick = async () => {
         const ok = await ui.confirm({ title: 'Change server?', confirm: 'Change server',
