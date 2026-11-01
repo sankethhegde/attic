@@ -10,6 +10,9 @@ const { createFiles, parseRange, FileError, INLINE } = require('./files');
 const { createOwnership } = require('./ownership');
 const { startResponder, loadServerId, DEFAULT_PORT: DEFAULT_DISCOVERY_PORT } = require('./discovery');
 const { createPairing, KINDS: DEVICE_KINDS } = require('./pairing');
+const ws = require('./ws');
+const { createHub } = require('./hub');
+const { createSelfStats } = require('./self-stats');
 
 const UI_ROOT = path.resolve(__dirname, '..', 'ui');
 // Overridable so the tests can run a server on a throwaway config and data folder.
@@ -200,17 +203,32 @@ function identifyDevice(req) {
 const NOT_PAIRED = () => new AuthError(403, 'NOT_PAIRED', 'This device isn’t paired with the HP yet. Ask for a pairing code on the HP.');
 const deviceIdOf = req => req.device ? req.device.id : null;
 
-// The device list. Everyone signed in sees which devices exist and whether they're online; only the
-// master sees when and by whom each was paired, and its last address.
-function listDevices(req, master) {
-  const all = [Object.assign({}, SERVER_DEVICE, { online: true, lastSeenAt: new Date().toISOString() })]
-    .concat(pairing.list().map(d => Object.assign({ role: 'client' }, d)));
-  return all.map(d => {
-    const out = { id: d.id, name: d.name, kind: d.kind, os: d.os, role: d.role, online: d.online, lastSeenAt: d.lastSeenAt, thisPC: d.id === deviceIdOf(req) };
-    if (master && d.role === 'client') Object.assign(out, { pairedAt: d.pairedAt, pairedBy: d.pairedBy, lastAddress: d.lastAddress });
-    return out;
-  });
+// ---------- the device list (2-2) with live state (2-3) ----------
+// Everyone signed in sees which devices exist, whether they're online and how they're connected. Only
+// the master sees their stats, IP address, and when, by whom and from where each was paired.
+// Online: a device whose agent has ever reported is online while its agent is connected; one without an
+// agent (the iPhone's browser) while its interface is open, or it made a request in the last 2 minutes.
+const hub = createHub(DATA_DIR, { log: m => console.log('  ' + m) });
+function describeDevice(d, { master, viewerDeviceId }) {
+  const live = hub.live(d.id), l = live.latest;
+  const isServer = d.id === SERVER_DEVICE.id;
+  const online = isServer || (live.hasAgent ? live.agentOnline : live.connected || d.online);
+  const out = { id: d.id, name: d.name, kind: d.kind, os: d.os, role: isServer ? 'server' : 'client', online,
+    lastSeenAt: online ? new Date().toISOString() : d.lastSeenAt, thisPC: d.id === viewerDeviceId,
+    browserOnly: !isServer && !live.hasAgent, connection: l ? l.connection : null, stats: null };
+  if (!master) return out;
+  Object.assign(out, { ip: l ? l.ip : null, stats: online && l ? l.stats : null, statsAt: l ? l.at : null });
+  if (!online && l) out.lastStats = l.stats;
+  if (!isServer) Object.assign(out, { pairedAt: d.pairedAt, pairedBy: d.pairedBy, lastAddress: d.lastAddress });
+  return out;
 }
+const allDevices = () => [SERVER_DEVICE].concat(pairing.list());
+const listDevices = (viewerDeviceId, master) => allDevices().map(d => describeDevice(d, { master, viewerDeviceId }));
+hub.setDescriber((id, who) => { const d = allDevices().find(x => x.id === id); return d ? describeDevice(d, who) : null; });
+
+// The HP measures itself while a master is watching the Devices view.
+const selfStats = createSelfStats();
+setInterval(async () => { if (hub.mastersWatching()) hub.reportSelf(SERVER_DEVICE.id, await selfStats()); }, hub.STATS_INTERVAL_MS).unref();
 
 // ---------- api ----------
 // Every route but setup and sign-in needs a session; the handler gets { session, account, token }.
@@ -307,6 +325,7 @@ async function handleApi(req, res, url, query) {
     if (device) throw new AuthError(409, 'ALREADY_PAIRED', device === SERVER_DEVICE ? 'This is the HP itself; it doesn’t need pairing.' : 'This device is already paired.');
     const r = pairing.claim(body, clientAddr(req));
     console.log(`  Paired: ${r.device.name} (${r.device.id}) from ${r.device.lastAddress}`);
+    hub.deviceAdded(r.device.id);
     return sendJSON(res, 201, { device: { id: r.device.id, name: r.device.name, kind: r.device.kind } }, { 'Set-Cookie': deviceCookie(r.token) });
   }
   // Everything else needs a paired device first, setup and sign-in included.
@@ -331,6 +350,7 @@ async function handleApi(req, res, url, query) {
     }
     if (m === 'DELETE') {
       auth.signOut(readCookie(req, COOKIE));
+      hub.recheck();
       return sendJSON(res, 200, { ok: true }, { 'Set-Cookie': clearCookie });
     }
   }
@@ -405,7 +425,7 @@ async function handleApi(req, res, url, query) {
   // ---------- devices and pairing codes (Phase 2, 2-2) ----------
   if (url === '/api/devices' && m === 'GET') {
     const who = requireSession(req);
-    return sendJSON(res, 200, listDevices(req, who.session.type === 'master'));
+    return sendJSON(res, 200, listDevices(deviceIdOf(req), who.session.type === 'master'));
   }
   // Unpair (master): the device's token stops working at once, and everyone signed in on it is signed out.
   const devEdit = /^\/api\/devices\/([A-Za-z0-9_-]{1,64})$/.exec(url);
@@ -414,6 +434,8 @@ async function handleApi(req, res, url, query) {
     if (devEdit[1] === SERVER_DEVICE.id) throw new AuthError(400, 'INVALID', 'The HP is the server; it can’t be unpaired.');
     const d = pairing.unpair(devEdit[1]);
     auth.dropDeviceSessions(d.id);
+    hub.deviceRemoved(d.id);
+    hub.recheck();
     console.log(`  Unpaired: ${d.name} (${d.id})`);
     return sendJSON(res, 200, { ok: true, device: { id: d.id, name: d.name } });
   }
@@ -446,6 +468,7 @@ async function handleApi(req, res, url, query) {
       const who = requireSession(req);
       if (who.session.accountId !== id) throw new AuthError(403, 'FORBIDDEN', 'You can only change your own password.');
       await auth.changePassword(id, body.current, body.next, who.token);
+      hub.recheck();
       return sendJSON(res, 200, { ok: true });
     }
     // Master only from here: what an account owns, and moving it on revoke, restore and remove.
@@ -459,6 +482,7 @@ async function handleApi(req, res, url, query) {
       deviceOrThrow(id);
       const c = custodianFor(body.custodianId, id);
       const r = await inOneStep(() => own.revoke(id, c.id), () => auth.setDeviceStatus(id, 'revoked'));
+      hub.recheck();
       return sendJSON(res, 200, { account: r.account, moved: await files.sizes(r.moved), custodian: c });
     }
     if (sub === '/restore' && m === 'POST') {
@@ -472,6 +496,7 @@ async function handleApi(req, res, url, query) {
       deviceOrThrow(id);
       const c = custodianFor(body.custodianId, id);
       const r = await inOneStep(() => own.remove(id, c.id), () => auth.removeDevice(id));
+      hub.recheck();
       return sendJSON(res, 200, { moved: await files.sizes(r.moved), custodian: c });
     }
   }
@@ -511,6 +536,42 @@ const server = http.createServer(async (req, res) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
   serveStatic(req, res);
 });
+
+// ---------- the live hub (Phase 2, 2-3) ----------
+// GET /api/hub as a WebSocket. ?role=agent: a paired PC's background part, identified by its device
+// token alone, reporting its own stats. Otherwise a viewer: the interface, with a session on a paired
+// device, like any other API call. Browsers send an Origin header, and it must be this server, so a
+// page on another site can't open a hub connection with this browser's cookies.
+server.on('upgrade', (req, socket) => {
+  socket.on('error', () => socket.destroy());
+  let parsed;
+  try { parsed = new URL(req.url, 'http://x'); } catch (e) { return ws.refuse(socket, 400, { code: 'INVALID', message: 'Bad request.' }); }
+  if (parsed.pathname !== '/api/hub') return ws.refuse(socket, 404, { code: 'NOT_FOUND', message: 'No such endpoint.' });
+  const origin = req.headers.origin;
+  if (origin && origin !== `http://${req.headers.host}`) return ws.refuse(socket, 403, { code: 'FORBIDDEN', message: 'Cross-site request refused.' });
+  const device = identifyDevice(req);
+  const deviceId = deviceIdOf(req), deviceToken = req.deviceToken;
+  const stillPaired = () => !device || device === SERVER_DEVICE || !!pairing.resolve(deviceToken);
+
+  if (parsed.searchParams.get('role') === 'agent') {
+    if (!device) return ws.refuse(socket, 403, NOT_PAIRED_BODY);
+    if (device === SERVER_DEVICE) return ws.refuse(socket, 400, { code: 'INVALID', message: 'The HP reports its own stats; it doesn’t need an agent.' });
+    const conn = ws.accept(req, socket);
+    if (!conn) return ws.refuse(socket, 400, { code: 'INVALID', message: 'Expected a WebSocket handshake.' });
+    return hub.addAgent(conn, deviceId, stillPaired);
+  }
+
+  if (CONFIG.pairing.required && !device) return ws.refuse(socket, 403, NOT_PAIRED_BODY);
+  const sessionToken = readCookie(req, COOKIE);
+  const who = auth.resolve(sessionToken, deviceId);
+  if (!who) return ws.refuse(socket, 401, { code: 'SIGNED_OUT', message: 'Your session has ended. Sign in again.' });
+  const conn = ws.accept(req, socket);
+  if (!conn) return ws.refuse(socket, 400, { code: 'INVALID', message: 'Expected a WebSocket handshake.' });
+  const master = who.session.type === 'master';
+  hub.addViewer(conn, { deviceId, master, devices: listDevices(deviceId, master),
+    check: () => stillPaired() && !!auth.resolve(sessionToken, deviceId) });
+});
+const NOT_PAIRED_BODY = { code: 'NOT_PAIRED', message: 'This device isn’t paired with the HP yet. Ask for a pairing code on the HP.' };
 
 server.on('error', e => {
   console.error(e.code === 'EADDRINUSE' ? `Port ${CONFIG.port} is already in use.` : e.message);

@@ -4,7 +4,7 @@ The server that runs on the HP laptop. Built one milestone at a time from `docs/
 
 **Now: milestones 1–6, the whole brief.** Core Node only, no install step. It serves `ui/`, reports the real drives, owns accounts, passwords and sessions, browses, downloads and uploads real folders, enforces who owns what, and indexes every share for Photos, Videos, Other and the Dashboard. The browser's file mock is gone; only Devices and Transfers keep sample data, until Phase 2.
 
-**Phase 2 on the server:** discovery (2-1) answers clients looking for the HP on the home network, and pairing (2-2) lets only devices the master approved use it. Live stats and transfers follow.
+**Phase 2 on the server:** discovery (2-1) answers clients looking for the HP on the home network, pairing (2-2) lets only devices the master approved use it, and the live hub (2-3) carries each device's stats to the master as they change. Transfers follow.
 
 ## Run it
 
@@ -180,6 +180,43 @@ The rules:
 Pairing is on by default. To turn it off while the client's half is being built, set `"pairing": { "required": false }` in `config.json`; the server's start-up lines say `Pairing: OFF`.
 
 `pairing.test.js` covers it against a real server. `127.0.0.1` is the HP, and `127.0.0.2` and up stand in for other machines.
+
+## Live stats (Phase 2, milestone 2-3, D-03 and D-04)
+
+The Devices view goes live through one WebSocket, `GET /api/hub`. `hub.js` keeps the latest stats per device and who is connected; `ws.js` is a small WebSocket implementation in core Node (JSON text frames up to 64 KB, ping/pong, close). This is the HP's half of 2-3. The agent that collects a client's stats with `systeminformation`, and the Devices view switching from mock to live, are the Acer's half.
+
+**Two kinds of connection**
+
+| | Opens | Identified by | Gets |
+| --- | --- | --- | --- |
+| **Agent** (a client PC's background part) | `ws://<HP>:8080/api/hub?role=agent` | Its device token alone (`X-Attic-Device` header or `attic_device` cookie). No user session: it reports about the machine, and can read nothing back | `{"type":"hello","deviceId","interval":3000}`, then nothing but errors |
+| **Viewer** (the interface) | `ws://<HP>:8080/api/hub` | A session on a paired device, like any API call | `{"type":"devices","devices":[…]}` first (the same list as `GET /api/devices`), then `{"type":"device","device":{…}}` per change and `{"type":"removed","id"}` on unpair |
+
+**The agent's report**, about every 3 seconds:
+
+```json
+{ "type": "stats",
+  "stats": { "cpu": 22, "ramTotal": 8000000000, "ramUsed": 5600000000, "diskTotal": 512000000000, "diskFree": 188000000000, "battery": 78, "charging": false },
+  "connection": "wifi", "ip": "192.168.1.23" }
+```
+
+`stats` is the shape the Devices view already reads. Bytes are numbers, percentages are 0–100, and `battery` is `null` without one. `connection` is `wifi`, `ethernet` or `other`. A report that doesn't check out gets `{"type":"error","code":"INVALID"}` and changes nothing. Reports closer together than about a second are ignored.
+
+**Who sees what**
+- **The master** gets every change as it arrives: stats, `ip` and `statsAt`, plus `lastStats` once a device goes offline. In the tests a report reaches the master in a few milliseconds, against the 5-second acceptance target.
+- **Everyone else** sees each device's name, kind, `online`, `lastSeenAt` and `connection`, with `stats: null`. They hear only when a device comes or goes, never stats changes.
+- **The HP** measures itself (`self-stats.js`: CPU, RAM and the system drive, from core Node; battery `null`) every 3 seconds, and only while a master has the Devices view open.
+
+**Online** means a device's agent is connected. A device with no agent (the iPhone's browser, `browserOnly: true`) is online while its interface is connected, or for 2 minutes after its last request. A dropped agent shows offline as soon as its connection ends; one that goes silent is dropped after 35 seconds without a reply to a ping.
+
+**Safety**
+- A browser's `Origin` must be this server, so a page on another site can't open a hub connection with your cookies.
+- Unpairing closes that device's agent and viewers at once. Signing out, a password change, a revoke or a removal closes the connections whose session ended, and every connection is re-checked on each 15-second ping.
+- One agent per device: a new one (the tool restarted) replaces the old.
+- More than 40 messages in 10 seconds closes the connection. So does a binary, fragmented, unmasked or oversized frame, each with the RFC's close code.
+- The latest stats are kept in `server/data/device-stats.json`, written at most every 30 seconds and when an agent disconnects.
+
+`hub.test.js` plays both an agent on "another machine" (127.0.0.2) and the interface on the HP.
 
 ## Rules that carry over
 

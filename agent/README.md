@@ -31,4 +31,6 @@ Tests: `desktop/scripts/pairing-test.mjs`. It runs the real tool against a throw
 - **2-3 Live stats:** the `systeminformation` npm package, over a WebSocket to the HP.
 - **2-4 Hub Inbox:** receiving files sent from other devices.
 
+**The live hub is ready on the HP** (Phase 2, 2-3). The agent opens `ws://<HP>:8080/api/hub?role=agent` with the `X-Attic-Device` header and waits for `{"type":"hello","interval":3000}`. Then, every `interval` ms, it sends `{"type":"stats","stats":{cpu,ramTotal,ramUsed,diskTotal,diskFree,battery,charging},"connection","ip"}`. On a close it reconnects with a backoff; a close code of 4001 means the device was unpaired. The Devices view opens `/api/hub` without `role`, gets `{"type":"devices"}` and then `{"type":"device"}` changes. The details are in [server/README.md](../server/README.md#live-stats-phase-2-milestone-2-3-d-03-and-d-04).
+
 The Transfers view in `ui/` shows sample data from `ui/js/mockgen.js` until then. The agent has to produce the same shapes.
