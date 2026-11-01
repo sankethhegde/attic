@@ -107,6 +107,27 @@ Also checked: 360px with no horizontal scrolling on Devices, Transfers, Dashboar
 
 Fixed during 1B: the Google Fonts stylesheet blocked every script until it downloaded, so a fresh or offline start could freeze. It now loads without blocking. A hidden tooltip at the edge of the page widened it at 360px; tooltips now take no space until shown.
 
+## Phase 2, milestone 2-1: finding the HP, the Acer's half (2026-11-01)
+
+The HP's half (the discovery responder) was built and merged in pull request #5. This is the client's half: `agent/connect.js`, the start screen `ui/connect.html`, and Settings → Server.
+
+| Check | Result | How it was verified |
+| --- | --- | --- |
+| A new device finds the HP without an IP address being typed | ✅ against a local server · ⏳ real HP | `discovery-test.mjs` on the dev build and the packaged exe: a fresh tool found a throwaway server by broadcast and opened its interface. The real HP didn't answer from this PC on 1 Nov, so this is still to be run against it. |
+| "Looking for server" state | ✅ | The start screen shows while searching, then "Found …" or "No Attic server found" with the likely causes |
+| Typed address as a fallback | ✅ | Bad addresses get a reason (`Nothing answered at 127.0.0.1:1.`, `An IP address has four numbers…`); a good one connects |
+| Several servers answer | ✅ | Unit test: the screen lists them to choose from, and the one used last is marked |
+| The HP changes IP | ✅ | Unit test: the remembered `serverId` is followed to its new address |
+| A different server at the remembered address | ✅ | Unit test: not trusted, because the `serverId` must match |
+| The HP goes away while the interface is open | ✅ | It's noticed within 30 s, and the tool shows "Reconnecting…", then "Can’t reach …" with Search again |
+| Restart goes straight to the remembered server | ✅ | Reconnected in about 1 s on the dev build and the packaged exe |
+| Server address in the tool's settings (Setup row) | ✅ | Settings → Server shows the HP's name and address, and Change server returns to the start screen |
+| Every view still works inside the tool | ✅ | `smoke-test.mjs` against a throwaway server: 9 views, 0 console errors |
+
+Tests: `node --test "agent/*.test.js"` (9 tests) and `node --test "server/*.test.js"` (83 tests, unchanged), all passing.
+
+**To finish 2-1 on the real HP:** pull `main` on the HP and restart the server, so `/api/hello` and discovery are running. Make sure Windows Firewall on the HP allows inbound **UDP 41980** and **TCP 8080** on the Private profile. Then start the tool on the Acer. It should find the HP without an address being typed.
+
 ## Problems found and fixed during the run
 
 1. **Focus after navigation:** after opening a folder or tab, keyboard focus fell back to the top of the page, so you had to Tab through the header again. It now moves into the new content.

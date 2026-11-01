@@ -603,6 +603,24 @@ h1, h2, h3 { margin: 0; }
 .dl-row:hover { background: var(--surface); }
 .dl-row .c { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* ---------- desktop tool start screen: finding the HP (2-1) ---------- */
+.connect-stage { background: radial-gradient(ellipse 80% 70% at 50% 35%, #2b2a6b 0%, #15163a 55%, #0b0c1f 100%); }
+.connect-card { width: 440px; }
+.connect-card h1 { margin-top: 2px; }
+.connect-progress { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); padding: 12px 14px; border-radius: var(--r-md); background: var(--field); }
+.connect-progress .spinner { color: var(--accent); flex: none; }
+.connect-checks { margin: 0 0 16px; padding-left: 20px; color: var(--muted); font-size: 13.5px; line-height: 20px; display: grid; gap: 6px; }
+.connect-checks b { color: var(--ink); font-weight: 700; }
+.connect-hint { font-size: 12.5px; color: var(--muted); margin: 0 0 12px; }
+.connect-form { margin-top: 6px; }
+.connect-list { display: grid; gap: 8px; margin-bottom: 12px; }
+.connect-choice { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 14px; border-radius: var(--r-md); border: 1.5px solid var(--line); background: var(--field); cursor: pointer; text-align: left; font: inherit; color: inherit; }
+.connect-choice:hover, .connect-choice:focus-visible { border-color: var(--accent); outline: none; box-shadow: 0 0 0 4px var(--focus-ring); }
+.connect-choice > span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.connect-choice .c { font-size: 12.5px; color: var(--muted); }
+.connect-choice > .ic { color: var(--muted); }
+.connect-choice > .ic:first-child { color: var(--accent); }
+
 /* ---------- hub: devices and transfers ---------- */
 .hub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
 .hub-card { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }

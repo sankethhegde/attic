@@ -1,11 +1,24 @@
-// Tells the interface it is running inside the desktop tool. Nothing else crosses the bridge yet;
-// later phases add mode, Hub Inbox and notification calls here.
-const { contextBridge } = require('electron');
+// The bridge between the window and the desktop tool. It tells the interface it runs inside the tool,
+// and (Phase 2, 2-1) lets the start screen drive the search for the HP and Settings show or change it.
+const { contextBridge, ipcRenderer } = require('electron');
 
 const arg = (process.argv.find(a => a.startsWith('--attic-version=')) || '').split('=')[1];
 
 contextBridge.exposeInMainWorld('atticDesktop', {
   isDesktop: true,
   version: arg || null,
-  platform: process.platform
+  platform: process.platform,
+  // The start screen: follow the search, retry it, pick a server, or type an address.
+  hub: {
+    onState: cb => { ipcRenderer.on('hub:state', (_e, s) => cb(s)); },
+    ready: () => ipcRenderer.send('hub:ready'),
+    retry: () => ipcRenderer.send('hub:retry'),
+    choose: id => ipcRenderer.send('hub:choose', String(id)),
+    connectTo: text => ipcRenderer.send('hub:connectTo', String(text))
+  },
+  // Settings: which HP this tool is using, and a way back to the start screen to pick another.
+  server: {
+    current: () => ipcRenderer.invoke('hub:current'),
+    change: () => ipcRenderer.send('hub:change')
+  }
 });

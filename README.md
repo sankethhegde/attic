@@ -41,7 +41,8 @@ Electron's binary download is an install script, which npm may hold for approval
 | `npm run dist` | Builds `dist/Attic-Hub-Setup-<version>.exe`, the installer for every PC |
 | `npm run pack` | Builds the unpacked app only (`dist/win-unpacked/`), which is quicker for testing |
 | `npm run icons` | Regenerates `build/icon.ico` and `build/icon.png` from the logo SVG |
-| `node scripts/smoke-test.mjs [exe]` | Opens the tool (or a built exe), visits every view and fails on any console error |
+| `node scripts/smoke-test.mjs [exe]` | Starts a throwaway server, opens the tool (or a built exe) against it, visits every view and fails on any console error |
+| `node scripts/discovery-test.mjs [exe]` | The 2-1 flow end to end: finds a throwaway server by broadcast, survives it going away, takes a typed address, and reconnects on restart |
 | `node scripts/serve-ui.js` | Serves `ui/` on localhost, to check it in a normal browser |
 
 ## First run
@@ -54,7 +55,7 @@ On a fresh server the interface shows setup for the master account, with a passw
 - **Ownership:** every file has an `ownerId` (`null` means the common space) and an `uploadedBy`. The server applies it to every listing, download, upload and index: a device sees only its own and common files; the master sees everything.
 - **Devices and Transfers:** sample data from `ui/js/mockgen.js` (`generateHub`), with live movement added in `api.js`, until Phase 2. Stats are visible only to the master.
 - **Browser storage:** `fs.settings` (theme, background, views) and `fs.mockHub` (the sample devices) in localStorage, plus custom backgrounds in IndexedDB (`fs.backgrounds`). Accounts, sessions, shares and files are on the server.
-- **The desktop tool** still opens `ui/` from disk, so it needs pointing at the HP server before it can sign in. That arrives with the tool's server address setting.
+- **The desktop tool finds the HP by itself** (Phase 2, 2-1). It starts on a "Looking for server" screen (`ui/connect.html`), finds the HP through `agent/connect.js` (the last server used, then a discovery broadcast), and opens the interface the HP serves, so sign-in and files are real. If nothing answers, the screen explains why and takes a typed address. Settings → Server shows which HP it's using and can change it.
 
 ## Brand
 

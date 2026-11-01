@@ -42,6 +42,15 @@
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="signout">${U.icon('logout')}Sign out</button></div></div>
       </section>
 
+      ${root.atticDesktop && root.atticDesktop.server ? `
+      <section class="card" aria-labelledby="h-srv">
+        <h2 id="h-srv">Server</h2>
+        <div class="set-row"><div class="lbl">Connected to<small>The desktop tool finds the HP on your home network by itself, and remembers it for next time.</small></div>
+          <div class="ctl" id="srv-now"><span class="skel" style="display:inline-block;width:180px;height:14px"></span></div></div>
+        <div class="set-row"><div class="lbl">Use another server<small>Search the network again, or type an address. You’ll sign in on the server you pick.</small></div>
+          <div class="ctl"><button class="btn btn-secondary btn-sm" id="srv-change">${U.icon('refresh')}Change server</button></div></div>
+      </section>` : ''}
+
       ${master ? `
       <section class="card" aria-labelledby="h-sh">
         <div class="card-head" style="margin-bottom:4px"><h2 id="h-sh">Shares <span class="scope">Master</span></h2><span class="grow"></span><button class="btn btn-secondary btn-sm" id="add-share">${U.icon('plus')}Add share</button></div>
@@ -89,6 +98,21 @@
     main.querySelectorAll('[data-psize]').forEach(b => b.onclick = async () => { press('psize', b.dataset.psize); await save({ photoSize: b.dataset.psize }, 'Thumbnail size saved'); });
     background.renderPicker(main.querySelector('#picker'));
     root.Attic.device.field(main.querySelector('#this-device'));
+
+    // Desktop tool only: which HP this tool is talking to, and a way to pick another (Phase 2, 2-1).
+    const srvNow = main.querySelector('#srv-now');
+    if (srvNow) {
+      root.atticDesktop.server.current().then(sv => {
+        srvNow.innerHTML = sv
+          ? `<span><b>${U.esc(sv.name)}</b> · <span class="mono">${U.esc(sv.address)}:${sv.port}</span></span>`
+          : '<span class="muted">Not known</span>';
+      }).catch(() => { srvNow.innerHTML = '<span class="muted">Not known</span>'; });
+      main.querySelector('#srv-change').onclick = async () => {
+        const ok = await ui.confirm({ title: 'Change server?', confirm: 'Change server',
+          lead: 'The tool goes back to its start screen to find or type another server. You’ll need to sign in there.' });
+        if (ok) root.atticDesktop.server.change();
+      };
+    }
 
     const dname = main.querySelector('#dname');
     const saveName = async () => {
