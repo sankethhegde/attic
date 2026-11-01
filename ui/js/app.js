@@ -15,7 +15,7 @@
     videos: { sort: 'newest', share: '', query: '' },
     other: { sort: 'newest', share: '', query: '' }
   });
-  const state = { session: null, account: null, settings: null, needsSetup: false, tabs: freshTabs(), scroll: {}, cameFromDashboard: false };
+  const state = { session: null, account: null, settings: null, needsSetup: false, needsPairing: false, unpaired: false, tabs: freshTabs(), scroll: {}, cameFromDashboard: false };
   let shellApi = null, ctx = null, token = 0, prevKey = null, loginOpts = null;
 
   function parse() {
@@ -45,6 +45,20 @@
     ui.closeMenus();
     document.querySelectorAll('.veil, .lightbox, .chart-tip').forEach(x => x.remove());
 
+    // Phase 2, 2-2: a device the HP doesn't know pairs first; nothing else answers until it has.
+    if (state.needsPairing) {
+      if (seg !== 'pair') return replace('#/pair');
+      leaveShell();
+      document.title = 'Pair this device · Attic Hub';
+      return A.login.renderPair(app, async () => {
+        state.needsPairing = false;
+        state.unpaired = false;
+        A.background.engine.unmount();
+        try { state.needsSetup = await api.needsSetup(); } catch (e) { /* the next screen reports it */ }
+        go(state.needsSetup ? '#/setup' : '#/login');
+      }, { unpaired: state.unpaired });
+    }
+    if (seg === 'pair') return replace(state.session ? landing() : '#/login');
     if (state.needsSetup) {
       if (seg !== 'setup') return replace('#/setup');
       leaveShell();
@@ -100,8 +114,10 @@
       state.settings = await api.getSettings();
       ui.applyTheme(state.settings.theme);
       state.tabs = freshTabs(state.settings.filesView);
-      state.needsSetup = await api.needsSetup();
-      if (!state.needsSetup) {
+      const p = await api.getPairing();
+      state.needsPairing = p.required && !p.paired;
+      state.needsSetup = !state.needsPairing && await api.needsSetup();
+      if (!state.needsSetup && !state.needsPairing) {
         const s = await api.getSession();
         if (s) { state.session = s.session; state.account = s.account; }
       }
@@ -111,6 +127,15 @@
       return;
     }
     root.addEventListener('hashchange', route);
+    // Unpaired on the HP while in use: every call now answers NOT_PAIRED, so start again from pairing.
+    root.addEventListener('attic:not-paired', () => {
+      if (state.needsPairing) return;
+      leaveShell();
+      state.needsPairing = true;
+      state.unpaired = true;
+      state.session = state.account = null;
+      route();
+    });
     route();
   }
   boot();

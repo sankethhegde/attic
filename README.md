@@ -43,6 +43,7 @@ Electron's binary download is an install script, which npm may hold for approval
 | `npm run icons` | Regenerates `build/icon.ico` and `build/icon.png` from the logo SVG |
 | `node scripts/smoke-test.mjs [exe]` | Starts a throwaway server, opens the tool (or a built exe) against it, visits every view and fails on any console error |
 | `node scripts/discovery-test.mjs [exe]` | The 2-1 flow end to end: finds a throwaway server by broadcast, survives it going away, takes a typed address, and reconnects on restart |
+| `node scripts/pairing-test.mjs [exe]` | The 2-2 flow end to end: pairs the tool with a throwaway server using a code, pairs a second device from Pair a device, unpairs, restarts, and is unpaired while in use |
 | `node scripts/serve-ui.js` | Serves `ui/` on localhost, to check it in a normal browser |
 
 ## First run
@@ -53,7 +54,8 @@ On a fresh server the interface shows setup for the master account, with a passw
 
 - `ui/js/api.js` is the only module that talks to the server or touches browser storage. Every function is async and can fail. The screens never call `fetch` themselves.
 - **Ownership:** every file has an `ownerId` (`null` means the common space) and an `uploadedBy`. The server applies it to every listing, download, upload and index: a device sees only its own and common files; the master sees everything.
-- **Devices and Transfers:** sample data from `ui/js/mockgen.js` (`generateHub`), with live movement added in `api.js`, until Phase 2. Stats are visible only to the master.
+- **Pairing (Phase 2, 2-2):** a device the HP doesn't know sees "Pair this device" before anything else, and types the one-time code the master gets from Devices → Pair a device. The HP keeps the device's identity in an HttpOnly cookie; the desktop tool writes it to disk straight away, so pairing survives restarts. The master unpairs a device from its card; a device unpaired while in use goes back to the pairing screen.
+- **Devices** are the HP's paired devices, from `/api/devices`. Live stats arrive with the agent in 2-3. **Transfers** are still sample data from `ui/js/mockgen.js` (`generateHub`) until 2-4 and 2-5.
 - **Browser storage:** `fs.settings` (theme, background, views) and `fs.mockHub` (the sample devices) in localStorage, plus custom backgrounds in IndexedDB (`fs.backgrounds`). Accounts, sessions, shares and files are on the server.
 - **The desktop tool finds the HP by itself** (Phase 2, 2-1). It starts on a "Looking for server" screen (`ui/connect.html`), finds the HP through `agent/connect.js` (the last server used, then a discovery broadcast), and opens the interface the HP serves, so sign-in and files are real. If nothing answers, the screen explains why and takes a typed address. Settings → Server shows which HP it's using and can change it.
 

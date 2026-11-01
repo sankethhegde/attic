@@ -64,7 +64,7 @@
 
     async function load(first) {
       try {
-        const [tr, dv] = await (first ? ui.load(body, Promise.all([api.listTransfers(), api.listHubDevices()]), ui.skeletonRows(8)) : Promise.all([api.listTransfers(), api.listHubDevices()]));
+        const [tr, dv] = await (first ? ui.load(body, Promise.all([api.listTransfers(), api.listTransferDevices()]), ui.skeletonRows(8)) : Promise.all([api.listTransfers(), api.listTransferDevices()]));
         list = tr; devs = new Map(dv.map(d => [d.id, d]));
       } catch (e) {
         if (!first) return schedule();
