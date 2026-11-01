@@ -85,7 +85,7 @@ function createAuth(dataDir) {
     return rest;
   }
   function publicSession(s) {
-    return { accountId: s.accountId, type: s.type, deviceType: s.deviceType, createdAt: s.createdAt, persistent: s.persistent, expiresAt: s.expiresAt };
+    return { accountId: s.accountId, type: s.type, deviceType: s.deviceType, deviceId: s.deviceId || null, createdAt: s.createdAt, persistent: s.persistent, expiresAt: s.expiresAt };
   }
 
   function pruneSessions(all) {
@@ -94,11 +94,12 @@ function createAuth(dataDir) {
     for (const k of Object.keys(all)) if (Date.parse(all[k].expiresAt) < t) { delete all[k]; changed = true; }
     return changed;
   }
-  function dropSessionsFor(accountId) {
+  function dropSessionsWhere(test) {
     const all = Object.assign({}, sessions.get());
-    for (const k of Object.keys(all)) if (all[k].accountId === accountId) delete all[k];
+    for (const k of Object.keys(all)) if (test(all[k])) delete all[k];
     sessions.save(all);
   }
+  const dropSessionsFor = accountId => dropSessionsWhere(s => s.accountId === accountId);
 
   // ---------- throttling ----------
   function recentFailures(addr) {
@@ -136,7 +137,8 @@ function createAuth(dataDir) {
 
     // One generic message for unknown user, wrong password, or wrong account type. A revoked account is
     // named only after its password checks out, so revocation can't be probed without the password.
-    async signIn({ mode, username, password, stay, deviceType } = {}, addr) {
+    // deviceId: the paired device signing in (Phase 2, 2-2). The session works only from that device.
+    async signIn({ mode, username, password, stay, deviceType } = {}, addr, deviceId = null) {
       throttle(addr);
       const u = String(username || '').trim().toLowerCase();
       const type = mode === 'master' ? 'master' : 'device';
@@ -150,7 +152,7 @@ function createAuth(dataDir) {
       accounts.save(accounts.get().map(a => a.id === acc.id ? Object.assign({}, a, { lastSeenAt: now() }, dt ? { lastDeviceType: dt } : {}) : a));
       const token = crypto.randomBytes(32).toString('base64url');
       const t = Date.now();
-      const s = { accountId: acc.id, type: acc.type, deviceType: dt, createdAt: new Date(t).toISOString(), persistent: !!stay,
+      const s = { accountId: acc.id, type: acc.type, deviceType: dt, deviceId, createdAt: new Date(t).toISOString(), persistent: !!stay,
         expiresAt: new Date(t + (stay ? STAY_MS : BROWSER_SESSION_MS)).toISOString() };
       const all = Object.assign({}, sessions.get(), { [tokenKey(token)]: s });
       pruneSessions(all);
@@ -159,11 +161,12 @@ function createAuth(dataDir) {
     },
 
     // The session behind a cookie token, or null. Expired sessions and inactive accounts end here.
-    resolve(token) {
+    // A session belongs to the device it was signed in on: a copied cookie fails anywhere else.
+    resolve(token, deviceId = null) {
       if (!token) return null;
       const key = tokenKey(token);
       const s = sessions.get()[key];
-      if (!s) return null;
+      if (!s || (s.deviceId || null) !== deviceId) return null;
       const acc = findAccount(s.accountId);
       if (Date.parse(s.expiresAt) < Date.now() || !acc || acc.status !== 'active') {
         const all = Object.assign({}, sessions.get()); delete all[key]; sessions.save(all);
@@ -225,6 +228,9 @@ function createAuth(dataDir) {
       return publicAccount(findAccount(id));
     },
 
+    // Unpairing a device (Phase 2, 2-2) signs out everyone who signed in on it.
+    dropDeviceSessions(deviceId) { dropSessionsWhere(s => s.deviceId === deviceId); },
+
     removeDevice(id) {
       const acc = findAccount(id);
       if (!acc || acc.type === 'master') throw new AuthError(403, 'FORBIDDEN', 'The master account can’t be deleted.');
@@ -234,4 +240,4 @@ function createAuth(dataDir) {
   };
 }
 
-module.exports = { createAuth, AuthError };
+module.exports = { createAuth, AuthError, jsonStore };

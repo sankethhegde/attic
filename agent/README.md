@@ -24,4 +24,6 @@ Tests: `node --test "agent/*.test.js"` (the logic, offline), and `desktop/script
 - **2-3 Live stats:** the `systeminformation` npm package, over a WebSocket to the HP.
 - **2-4 Hub Inbox:** receiving files sent from other devices.
 
+**Pairing is ready on the HP** (Phase 2, 2-2): the HP answers `403 NOT_PAIRED` to any device the master hasn't approved. The client's half is to check `GET /api/pairing` after connecting, ask for the code the HP shows, and send it to `POST /api/pairing/claim`. The routes are in [server/README.md](../server/README.md#pairing-and-unpairing-phase-2-milestone-2-2-d-02-and-d-11). The device token arrives as an `HttpOnly` cookie in the window's session, so the background part reads it from Electron's cookie store and sends it as `X-Attic-Device`.
+
 The Devices and Transfers views in `ui/` show sample data from `ui/js/mockgen.js` until then. The agent has to produce the same shapes.

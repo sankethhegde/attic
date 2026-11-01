@@ -9,6 +9,7 @@ const { createSafePath } = require('./safe-path');
 const { createFiles, parseRange, FileError, INLINE } = require('./files');
 const { createOwnership } = require('./ownership');
 const { startResponder, loadServerId, DEFAULT_PORT: DEFAULT_DISCOVERY_PORT } = require('./discovery');
+const { createPairing, KINDS: DEVICE_KINDS } = require('./pairing');
 
 const UI_ROOT = path.resolve(__dirname, '..', 'ui');
 // Overridable so the tests can run a server on a throwaway config and data folder.
@@ -16,6 +17,8 @@ const CONFIG_PATH = process.env.ATTIC_CONFIG || path.join(__dirname, 'config.jso
 const DATA_DIR = process.env.ATTIC_DATA || path.join(__dirname, 'data');
 const LAST_SEEN_PATH = path.join(DATA_DIR, 'last-seen.json');
 const COOKIE = 'attic_session';
+const DEVICE_COOKIE = 'attic_device';
+const DEVICE_COOKIE_AGE = 400 * 86400; // the longest a browser keeps a cookie; renewed at every sign-in
 const MAX_BODY = 16 * 1024;
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png', '.ico': 'image/x-icon', '.webp': 'image/webp', '.jpg': 'image/jpeg' };
@@ -32,8 +35,12 @@ function loadConfig() {
   const d = cfg.discovery || {};
   const envPort = process.env.ATTIC_DISCOVERY_PORT;
   const discoveryPort = envPort !== undefined ? +envPort : d.port !== undefined ? +d.port : DEFAULT_DISCOVERY_PORT;
+  // Pairing (Phase 2, 2-2) is required unless config says "pairing": { "required": false }. The HP itself
+  // (a browser on this PC, at localhost) counts as paired unless "trustThisPC" is false.
+  const p = cfg.pairing || {};
   return { raw: cfg, port: +process.env.ATTIC_PORT || cfg.port || 8080, host: cfg.host || '0.0.0.0', shares: cfg.shares,
-    discovery: { enabled: d.enabled !== false && discoveryPort > 0, port: discoveryPort } };
+    discovery: { enabled: d.enabled !== false && discoveryPort > 0, port: discoveryPort },
+    pairing: { required: p.required !== false, trustThisPC: p.trustThisPC !== false } };
 }
 const CONFIG = loadConfig();
 const auth = createAuth(DATA_DIR);
@@ -47,6 +54,10 @@ const MAX_UPLOAD = 20e9;
 // /api/hello repeats them so a client that found an address can check it reached the HP it meant.
 const SERVER_ID = loadServerId(DATA_DIR);
 const SERVER_NAME = os.hostname();
+const pairing = createPairing(DATA_DIR);
+// The HP in the device list. It never pairs: requests from this PC itself are the HP.
+const SERVER_DEVICE = { id: 'server', name: SERVER_NAME, kind: DEVICE_KINDS.includes(CONFIG.raw.serverKind) ? CONFIG.raw.serverKind : 'desktop',
+  os: os.version(), role: 'server' };
 
 // ---------- last seen ----------
 // An unplugged drive reports when it was last connected, so that has to survive a restart.
@@ -140,6 +151,8 @@ function sessionCookie(token, maxAge) {
   return `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict` + (maxAge ? `; Max-Age=${Math.floor(maxAge)}` : '');
 }
 const clearCookie = `${COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`;
+const deviceCookie = token => `${DEVICE_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${DEVICE_COOKIE_AGE}`;
+const clearDeviceCookie = `${DEVICE_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`;
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -171,6 +184,34 @@ function checkWrite(req, upload) {
 
 const clientAddr = req => req.socket.remoteAddress || 'unknown';
 
+// ---------- devices (Phase 2, 2-2) ----------
+// Which machine a request comes from: the HP itself (a connection from this PC), a paired device (its
+// token in the attic_device cookie, or the X-Attic-Device header for the desktop tool's background
+// part), or nobody. Sets req.device and req.deviceToken; a paired device's last-seen time is recorded.
+const THIS_PC = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+function identifyDevice(req) {
+  if (CONFIG.pairing.trustThisPC && THIS_PC.has(req.socket.remoteAddress)) return (req.device = SERVER_DEVICE);
+  const token = readCookie(req, DEVICE_COOKIE) || req.headers['x-attic-device'] || null;
+  req.deviceToken = token;
+  req.device = pairing.resolve(token);
+  if (req.device) pairing.touch(req.device.id, clientAddr(req));
+  return req.device;
+}
+const NOT_PAIRED = () => new AuthError(403, 'NOT_PAIRED', 'This device isn’t paired with the HP yet. Ask for a pairing code on the HP.');
+const deviceIdOf = req => req.device ? req.device.id : null;
+
+// The device list. Everyone signed in sees which devices exist and whether they're online; only the
+// master sees when and by whom each was paired, and its last address.
+function listDevices(req, master) {
+  const all = [Object.assign({}, SERVER_DEVICE, { online: true, lastSeenAt: new Date().toISOString() })]
+    .concat(pairing.list().map(d => Object.assign({ role: 'client' }, d)));
+  return all.map(d => {
+    const out = { id: d.id, name: d.name, kind: d.kind, os: d.os, role: d.role, online: d.online, lastSeenAt: d.lastSeenAt, thisPC: d.id === deviceIdOf(req) };
+    if (master && d.role === 'client') Object.assign(out, { pairedAt: d.pairedAt, pairedBy: d.pairedBy, lastAddress: d.lastAddress });
+    return out;
+  });
+}
+
 // ---------- api ----------
 // Every route but setup and sign-in needs a session; the handler gets { session, account, token }.
 const SIGNED_OUT = () => new AuthError(401, 'SIGNED_OUT', 'Your session has ended. Sign in again.');
@@ -178,7 +219,7 @@ const FORBIDDEN = () => new AuthError(403, 'FORBIDDEN', 'Only the master account
 
 function requireSession(req) {
   const token = readCookie(req, COOKIE);
-  const who = auth.resolve(token);
+  const who = auth.resolve(token, deviceIdOf(req));
   if (!who) throw SIGNED_OUT();
   return Object.assign(who, { token });
 }
@@ -253,6 +294,24 @@ async function handleApi(req, res, url, query) {
   // Public: which Attic server this is. Nothing about accounts, shares or files.
   if (url === '/api/hello' && m === 'GET') return sendJSON(res, 200, { app: 'Attic', api: 1, serverId: SERVER_ID, name: SERVER_NAME });
 
+  // ---------- pairing (Phase 2, 2-2) ----------
+  // Public: is this device paired? A token the HP no longer knows (the device was unpaired) is cleared.
+  const device = identifyDevice(req);
+  if (url === '/api/pairing' && m === 'GET') {
+    const out = { required: CONFIG.pairing.required, paired: !!device, thisPC: device === SERVER_DEVICE,
+      device: device ? { id: device.id, name: device.name, kind: device.kind } : null };
+    return sendJSON(res, 200, out, !device && req.deviceToken ? { 'Set-Cookie': clearDeviceCookie } : undefined);
+  }
+  // Public: a new device trades a one-time code for its identity. The token goes only into the cookie.
+  if (url === '/api/pairing/claim' && m === 'POST') {
+    if (device) throw new AuthError(409, 'ALREADY_PAIRED', device === SERVER_DEVICE ? 'This is the HP itself; it doesn’t need pairing.' : 'This device is already paired.');
+    const r = pairing.claim(body, clientAddr(req));
+    console.log(`  Paired: ${r.device.name} (${r.device.id}) from ${r.device.lastAddress}`);
+    return sendJSON(res, 201, { device: { id: r.device.id, name: r.device.name, kind: r.device.kind } }, { 'Set-Cookie': deviceCookie(r.token) });
+  }
+  // Everything else needs a paired device first, setup and sign-in included.
+  if (CONFIG.pairing.required && !device) throw NOT_PAIRED();
+
   if (url === '/api/setup') {
     if (m === 'GET') return sendJSON(res, 200, { needsSetup: auth.needsSetup() });
     if (m === 'POST') return sendJSON(res, 201, await auth.createMaster(body));
@@ -260,12 +319,15 @@ async function handleApi(req, res, url, query) {
 
   if (url === '/api/session') {
     if (m === 'GET') {
-      const who = auth.resolve(readCookie(req, COOKIE));
+      const who = auth.resolve(readCookie(req, COOKIE), deviceIdOf(req));
       return sendJSON(res, 200, who, who ? undefined : { 'Set-Cookie': clearCookie });
     }
     if (m === 'POST') {
-      const r = await auth.signIn(body, clientAddr(req));
-      return sendJSON(res, 200, { session: r.session, account: r.account }, { 'Set-Cookie': sessionCookie(r.token, r.maxAge) });
+      const r = await auth.signIn(body, clientAddr(req), deviceIdOf(req));
+      // Signing in also renews the device cookie, so a device in regular use never loses its pairing.
+      const cookies = [sessionCookie(r.token, r.maxAge)];
+      if (device && device !== SERVER_DEVICE && readCookie(req, DEVICE_COOKIE)) cookies.push(deviceCookie(readCookie(req, DEVICE_COOKIE)));
+      return sendJSON(res, 200, { session: r.session, account: r.account }, { 'Set-Cookie': cookies });
     }
     if (m === 'DELETE') {
       auth.signOut(readCookie(req, COOKIE));
@@ -338,6 +400,33 @@ async function handleApi(req, res, url, query) {
     requireMaster(req);
     const keys = (Array.isArray(body.ids) ? body.ids : []).map(files.parseId).filter(Boolean).map(k => ({ share: k.shareId, rel: k.rel }));
     return sendJSON(res, 200, { cleared: own.keep(keys).length });
+  }
+
+  // ---------- devices and pairing codes (Phase 2, 2-2) ----------
+  if (url === '/api/devices' && m === 'GET') {
+    const who = requireSession(req);
+    return sendJSON(res, 200, listDevices(req, who.session.type === 'master'));
+  }
+  // Unpair (master): the device's token stops working at once, and everyone signed in on it is signed out.
+  const devEdit = /^\/api\/devices\/([A-Za-z0-9_-]{1,64})$/.exec(url);
+  if (devEdit && m === 'DELETE') {
+    requireMaster(req);
+    if (devEdit[1] === SERVER_DEVICE.id) throw new AuthError(400, 'INVALID', 'The HP is the server; it can’t be unpaired.');
+    const d = pairing.unpair(devEdit[1]);
+    auth.dropDeviceSessions(d.id);
+    console.log(`  Unpaired: ${d.name} (${d.id})`);
+    return sendJSON(res, 200, { ok: true, device: { id: d.id, name: d.name } });
+  }
+  // One-time codes (master). Issuing one is the master's approval for one new device.
+  if (url === '/api/pairing/codes') {
+    if (m === 'GET') { requireMaster(req); return sendJSON(res, 200, pairing.listCodes()); }
+    if (m === 'POST') { const who = requireMaster(req); return sendJSON(res, 201, pairing.issueCode(who.session.accountId)); }
+  }
+  const codeEdit = /^\/api\/pairing\/codes\/([A-Za-z0-9_-]{1,64})$/.exec(url);
+  if (codeEdit && m === 'DELETE') {
+    requireMaster(req);
+    if (!pairing.cancelCode(codeEdit[1])) throw new AuthError(404, 'NOT_FOUND', 'That code has already been used or has expired.');
+    return sendJSON(res, 200, { ok: true });
   }
 
   if (url === '/api/accounts') {
@@ -438,6 +527,9 @@ server.listen(CONFIG.port, CONFIG.host, async () => {
     const d = await startResponder({ port: CONFIG.discovery.port, httpPort: CONFIG.port, name: SERVER_NAME, serverId: SERVER_ID, log: m => console.log('  ' + m) });
     if (d.status.listening) console.log(`  Discovery:    answering on UDP ${d.status.port} (home network only)`);
   } else console.log('  Discovery:    off');
+  const paired = pairing.list().length;
+  console.log(CONFIG.pairing.required ? `  Pairing:      required (${paired} paired device${paired === 1 ? '' : 's'}${CONFIG.pairing.trustThisPC ? '; this PC is trusted' : ''})`
+    : '  Pairing:      OFF — any device on the network can sign in');
   console.log('Shares:');
   for (const s of await listShares()) {
     console.log(`  ${s.id.padEnd(8)} ${s.rootPath.padEnd(22)} ${s.available ? `${(s.free / 1e9).toFixed(1)} GB free of ${(s.total / 1e9).toFixed(1)} GB` : 'UNAVAILABLE'}`);
