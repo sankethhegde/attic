@@ -2,6 +2,8 @@
   "port": 8080,
   "host": "0.0.0.0",
   "discovery": { "enabled": true, "port": 41980 },
+  "pairing": { "required": true, "trustThisPC": true },
+  "serverKind": "laptop",
   "shares": [
     { "id": "system", "name": "System",          "rootPath": "C:\\AtticShared",  "deviceType": "ssd" },
     { "id": "main",   "name": "Main storage",    "rootPath": "D:\\Shared",       "deviceType": "hdd" },

@@ -4,7 +4,7 @@ The server that runs on the HP laptop. Built one milestone at a time from `docs/
 
 **Now: milestones 1–6, the whole brief.** Core Node only, no install step. It serves `ui/`, reports the real drives, owns accounts, passwords and sessions, browses, downloads and uploads real folders, enforces who owns what, and indexes every share for Photos, Videos, Other and the Dashboard. The browser's file mock is gone; only Devices and Transfers keep sample data, until Phase 2.
 
-**Phase 2 has begun on the server:** discovery (2-1) answers clients looking for the HP on the home network. Pairing, live stats and transfers follow.
+**Phase 2 on the server:** discovery (2-1) answers clients looking for the HP on the home network, and pairing (2-2) lets only devices the master approved use it. Live stats and transfers follow.
 
 ## Run it
 
@@ -146,6 +146,40 @@ New-NetFirewallRule -DisplayName "Attic discovery (UDP 41980, Private)" -Directi
 ```
 
 `discovery.test.js` covers the subnet rule, malformed packets, the rate limit, the id across a restart, and starting with the port taken.
+
+## Pairing and unpairing (Phase 2, milestone 2-2, D-02 and D-11)
+
+Accounts say who is using Attic; paired devices say which machine the request comes from. **Every API request needs both.** This is the HP's half of 2-2; the "Pair a device" button, the code-entry screen and the Unpair button are the Acer's half.
+
+How a device pairs:
+
+1. The master asks the HP for a code (`POST /api/pairing/codes`, from Devices → Pair a device). **Issuing the code is the approval:** one code, one new device.
+2. The new device opens the HP's interface, sees it isn't paired (`GET /api/pairing`), and sends the code with its name (`POST /api/pairing/claim`).
+3. The HP stores the device (`server/data/devices.json`) and returns a 256-bit device token **only in an `attic_device` cookie** (`HttpOnly; SameSite=Strict`, 400 days, renewed at every sign-in). It keeps only the token's SHA-256. The desktop tool's background part can send the same token as an `X-Attic-Device` header instead.
+
+The rules:
+
+- **An unpaired device can do nothing but pair.** It still gets the interface itself (`/`, so it can show the pairing screen), `GET /api/hello` and `GET /api/pairing`. Every other `/api/` call, setup and sign-in included, answers `403 NOT_PAIRED`.
+- **The HP itself needs no pairing.** A request from this PC (`127.0.0.1` or `::1`) is the HP, which is how the master signs in to issue the first code. `"trustThisPC": false` turns that off.
+- **A session belongs to the device it was signed in on.** A session cookie copied to another device, or sent with no device, is refused. Sessions made before 2-2 belong to no device, so everyone signs in once more, the HP's own browser included.
+- **Codes** are six digits, last 10 minutes, work once, and live in memory only (a restart cancels them). At most 5 wait at once. Spaces and dashes are ignored (`123 456`). Five wrong codes lock that address out for 15 minutes, and 20 wrong codes from anywhere cancel every outstanding code, so a guesser's odds are at most about 1 in 10,000 each time the master issues a code (1 in 50,000 with a single code waiting).
+- **Unpairing** deletes the device. Its token stops working on its next request, everyone signed in on it is signed out, and a browser still holding its cookie has it cleared. It can pair again with a new code, as a new device. The HP can't be unpaired.
+- **Last seen**: a paired device's last request time and address are recorded, at most once a minute. `online` means seen in the last 2 minutes, until 2-3's live connection replaces it.
+
+| Route | Who | Does |
+| --- | --- | --- |
+| `GET /api/pairing` | anyone | `{ required, paired, thisPC, device }` for the calling device |
+| `POST /api/pairing/claim` | an unpaired device | `{ code, name, kind?, os? }` → `201 { device }` and the `attic_device` cookie |
+| `GET / POST /api/pairing/codes` | master | Outstanding codes / issue one `{ id, code, issuedAt, expiresAt }` |
+| `DELETE /api/pairing/codes/:id` | master | Cancel a code |
+| `GET /api/devices` | signed in | The HP and every paired device: `id, name, kind, os, role, online, lastSeenAt, thisPC`; the master also gets `pairedAt, pairedBy, lastAddress` |
+| `DELETE /api/devices/:id` | master | Unpair |
+
+`kind` is one of `laptop`, `desktop`, `handheld`, `phone`, `tablet`, `other`. The HP's own entry uses `"serverKind"` from `config.json` (default `desktop`).
+
+Pairing is on by default. To turn it off while the client's half is being built, set `"pairing": { "required": false }` in `config.json`; the server's start-up lines say `Pairing: OFF`.
+
+`pairing.test.js` covers it against a real server. `127.0.0.1` is the HP, and `127.0.0.2` and up stand in for other machines.
 
 ## Rules that carry over
 
