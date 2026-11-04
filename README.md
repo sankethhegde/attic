@@ -49,6 +49,7 @@ Electron's binary download is an install script, which npm may hold for approval
 | `node scripts/transfers-test.mjs [exe]` | The 2-5 flow end to end: live progress, a finished transfer moving to History, Cancel, Retry (automatic, and after a reload by choosing the file), filters, search, paging, and 360px |
 | `node scripts/mode-test.mjs [exe]` | The 3-1 flow: the first-launch choice, Client remembered, Server set up new (and an existing folder checked), started without installing, opened as the HP, stopped. With an exe, also runs it the way the Windows startup task does |
 | `node scripts/tray-test.mjs [exe]` | The 3-2 flow: the tray and its menu, closing to the tray, a received file's notification (one for several), the HP's events (delivered, failed, offline, online), switching them off, catching up after a restart, `--hidden`. With an exe, also switches the real start-with-Windows entry on and off |
+| `node scripts/shortcuts-test.mjs [exe]` | The 3-3 flow: choosing the Hub Inbox folder, "Send to Attic Hub" launches (a file and a folder) making one Send dialog and sending by path, Retry by path, dropping a file on the window, the Dashboard's Upload keeping its drops. With an exe, also adds and removes the real right-click entry |
 | `node scripts/serve-ui.js` | Serves `ui/` on localhost, to check it in a normal browser |
 
 ## First run
@@ -74,6 +75,11 @@ The installed tool carries the whole server (`resources\server`) and runs it wit
 - **From the HP's events:** a file this PC sent was delivered or didn't arrive (with the reason), and another device has gone offline or come back.
 - **While the tool was closed:** on the next start, it shows what it missed, and a long list becomes one summary. Nothing is shown twice.
 - **Switches** for each kind are in the tray and in Settings → This PC. They're per PC, kept in `prefs.json`.
+
+**Sending and receiving, the shortcuts** (3-3):
+- **The Hub Inbox folder** is chosen in Settings → Server → Hub Inbox (Change folder, or Use the default). The next file goes there; files already received stay where they are.
+- **Right-click "Send to Attic Hub"** in File Explorer works on files and folders (on Windows 11, under Show more options). It opens the Send dialog with them. Picking several makes one dialog, and a folder goes as its files. The tool sends them by their paths, and Retry can send them again the same way. The entry is per user (no Administrator), switchable in Settings → This PC, and removed on uninstall.
+- **Dropping files or folders** anywhere on the window opens the Send dialog. The Dashboard's Upload area still uploads to the HP. Windows doesn't let a program take drops on its tray icon, so the tray isn't a drop target.
 
 On a fresh server the interface shows setup for the master account, with a password you choose. The master then adds an account for each device from the Dashboard.
 

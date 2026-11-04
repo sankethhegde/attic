@@ -82,6 +82,7 @@
     if (!shellApi) {
       A.background.engine.unmount();
       shellApi = A.shell.create(app, { state, signOut });
+      A.send.watch(); // 3-3: files from File Explorer, and files dropped on the window, open the Send dialog
     }
     // Leaving a view: remember its scroll so returning lands where you were.
     const main = shellApi.main;

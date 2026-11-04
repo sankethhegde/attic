@@ -55,4 +55,20 @@ async function place(dir, name, part) {
   return final;
 }
 
-module.exports = { defaultFolder, safeName, uniquePath, partialPath, place, DEFAULT_NAME, PARTIAL };
+// A folder chosen as the Hub Inbox (3-3) must be a full path this PC can write to: made if it doesn't
+// exist, then tried with a scratch file. Throws an Error whose message can be shown as it is.
+async function checkFolder(dir) {
+  dir = String(dir || '').trim();
+  if (!path.isAbsolute(dir)) throw new Error('Choose a full folder path, like D:\\Inbox.');
+  const probe = path.join(dir, `.attic-check-${process.pid}`);
+  try {
+    await fs.promises.mkdir(dir, { recursive: true });
+    await fs.promises.writeFile(probe, 'ok');
+    await fs.promises.rm(probe, { force: true });
+  } catch (e) {
+    throw new Error(`Attic Hub can’t save files in ${dir} (${e.code || e.message}). Choose another folder.`);
+  }
+  return dir;
+}
+
+module.exports = { defaultFolder, safeName, uniquePath, partialPath, place, checkFolder, DEFAULT_NAME, PARTIAL };

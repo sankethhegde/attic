@@ -53,9 +53,11 @@
           <div class="ctl" id="srv-now"><span class="skel" style="display:inline-block;width:180px;height:14px"></span></div></div>
         <div class="set-row" data-client><div class="lbl">Live stats<small>While this PC is paired, the tool sends the HP its CPU, RAM, disk, battery and network every few seconds, for the master’s Devices view.</small></div>
           <div class="ctl" id="srv-agent"><span class="skel" style="display:inline-block;width:120px;height:14px"></span></div></div>
-        <div class="set-row" data-client><div class="lbl">Hub Inbox<small>Files other devices send to this PC land here, private to you. Choosing another folder comes in a later update.</small></div>
+        <div class="set-row" data-client><div class="lbl">Hub Inbox<small>Files other devices send to this PC land here, private to you. Changing the folder leaves files already received where they are.</small></div>
           <div class="ctl" style="flex-wrap:wrap;justify-content:flex-end;gap:8px"><span class="mono" id="inbox-path" style="font-size:12.5px;word-break:break-all"></span>
-            <button class="btn btn-secondary btn-sm" id="inbox-open">${U.icon('folder')}Open folder</button></div></div>
+            <button class="btn btn-secondary btn-sm" id="inbox-open">${U.icon('folder')}Open folder</button>
+            <button class="btn btn-secondary btn-sm" id="inbox-change">Change folder</button>
+            <button class="btn btn-ghost btn-sm" id="inbox-reset" hidden>Use the default</button></div></div>
         <div class="set-row" id="inbox-recent-row" hidden><div class="lbl">Received<small>The latest files that arrived while the tool was open.</small></div>
           <div class="ctl"><ul class="inbox-recent" id="inbox-recent"></ul></div></div>
         <div class="set-row" data-client><div class="lbl">Use another server<small>Search the network again, or type an address. You’ll sign in on the server you pick.</small></div>
@@ -72,6 +74,8 @@
           <div class="ctl"><label class="check"><input type="checkbox" id="pc-notify-transfers"> On</label></div></div>
         <div class="set-row" data-client><div class="lbl">Devices<small>A notification when another device has been offline for half a minute, and when it’s back.</small></div>
           <div class="ctl"><label class="check"><input type="checkbox" id="pc-notify-devices"> On</label></div></div>
+        <div class="set-row" data-client><div class="lbl">“Send to Attic Hub” in File Explorer<small id="pc-explorer-hint">Right-click files or a folder, then Send to Attic Hub (on Windows 11, under Show more options). Dropping files on this window works too.</small></div>
+          <div class="ctl"><label class="check"><input type="checkbox" id="pc-explorer"> On</label></div></div>
       </section>` : ''}
 
       ${master ? `
@@ -169,6 +173,22 @@
           const err = await root.atticDesktop.inbox.open().catch(e => e.message);
           if (err) ui.toast('Couldn’t open the Hub Inbox: ' + err, 'error');
         };
+        // Phase 3, 3-3 (T-07): another folder, or back to the default in Downloads.
+        const showPath = p => { main.querySelector('#inbox-path').textContent = p || ''; };
+        main.querySelector('#inbox-change').onclick = async () => {
+          const r = await root.atticDesktop.inbox.choose();
+          if (!r || r.canceled) return;
+          if (r.error) return ui.toast(r.error, 'error');
+          showPath(r.path);
+          main.querySelector('#inbox-reset').hidden = false;
+          ui.toast('Files sent to this PC now go to ' + r.path);
+        };
+        main.querySelector('#inbox-reset').onclick = async () => {
+          const r = await root.atticDesktop.inbox.reset();
+          showPath(r && r.path);
+          main.querySelector('#inbox-reset').hidden = true;
+          ui.toast('Back to the default Hub Inbox');
+        };
       }
       main.querySelector('#srv-change').onclick = async () => {
         const ok = await ui.confirm({ title: 'Change server?', confirm: 'Change server',
@@ -179,6 +199,10 @@
       if (root.atticDesktop.prefs) {
         const start = main.querySelector('#pc-start'), note = main.querySelector('#pc-notify');
         const noteT = main.querySelector('#pc-notify-transfers'), noteD = main.querySelector('#pc-notify-devices');
+        const explorerBox = main.querySelector('#pc-explorer');
+        const startHint = main.querySelector('#pc-start-hint'), startText = startHint.textContent;
+        const devOnly = ' (The installed Attic Hub only: this is a development copy.)';
+        const explorerHint = main.querySelector('#pc-explorer-hint'), explorerText = explorerHint.textContent;
         const show = p => {
           if (!p) return;
           start.checked = p.startWithWindows;
@@ -186,15 +210,20 @@
           note.checked = p.notifyReceived;
           noteT.checked = p.notifyTransfers;
           noteD.checked = p.notifyDevices;
+          explorerBox.checked = p.explorerMenu;
+          explorerBox.disabled = !p.canStartWithWindows; // the same rule: the installed app only
+          main.querySelector('#inbox-reset').hidden = p.inboxDefault;
+          startHint.textContent = (p.mode === 'server' ? 'The server already starts with Windows as a service. This only puts Attic Hub’s window in the tray at sign-in.' : startText)
+            + (p.canStartWithWindows ? '' : devOnly);
+          explorerHint.textContent = explorerText + (p.canStartWithWindows ? '' : devOnly);
           main.querySelector('#h-pc').dataset.loaded = '1';
-          if (p.mode === 'server') main.querySelector('#pc-start-hint').textContent = 'The server already starts with Windows as a service. This only puts Attic Hub’s window in the tray at sign-in.';
-          if (!p.canStartWithWindows) main.querySelector('#pc-start-hint').textContent += ' (The installed Attic Hub only: this is a development copy.)';
         };
         root.atticDesktop.prefs.get().then(show).catch(() => {});
         start.onchange = async () => { show(await root.atticDesktop.prefs.set({ startWithWindows: start.checked })); ui.toast(start.checked ? 'Attic Hub starts with Windows' : 'Attic Hub no longer starts with Windows'); };
         note.onchange = async () => { show(await root.atticDesktop.prefs.set({ notifyReceived: note.checked })); ui.toast(note.checked ? 'You’ll be notified when files arrive' : 'No notifications for received files'); };
         noteT.onchange = async () => { show(await root.atticDesktop.prefs.set({ notifyTransfers: noteT.checked })); ui.toast(noteT.checked ? 'You’ll hear how files you send get on' : 'No notifications for files you send'); };
         noteD.onchange = async () => { show(await root.atticDesktop.prefs.set({ notifyDevices: noteD.checked })); ui.toast(noteD.checked ? 'You’ll hear when devices go and come back' : 'No notifications about devices'); };
+        explorerBox.onchange = async () => { show(await root.atticDesktop.prefs.set({ explorerMenu: explorerBox.checked })); ui.toast(explorerBox.checked ? '“Send to Attic Hub” is in File Explorer' : '“Send to Attic Hub” is gone from File Explorer'); };
       }
     }
 

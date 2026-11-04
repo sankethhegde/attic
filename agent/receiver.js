@@ -15,8 +15,10 @@ const HEADER = 'X-Attic-Device';
 const RETRIES = [2000, 5000, 15000];        // a dropped download is resumed after these waits
 const LOCAL = new Set(['ENOSPC', 'EACCES', 'EPERM', 'EROFS', 'EDQUOT', 'ENAMETOOLONG']); // this PC can't save it
 
-// opts: { server: { address, port }, token, dir, onEvent({ type: 'receiving' | 'received' | 'failed' | 'cancelled', transfer, path?, error? }) }
+// opts: { server: { address, port }, token, dir (a folder, or a function giving the current one: 3-3),
+//         onEvent({ type: 'receiving' | 'received' | 'failed' | 'cancelled', transfer, path?, error? }) }
 function createReceiver({ server, token, dir, onEvent = () => {}, retries = RETRIES }) {
+  const dirOf = typeof dir === 'function' ? dir : () => dir;
   const base = `http://${server.address}:${server.port}`;
   const queue = [];               // transfers waiting their turn
   const known = new Set();        // ids queued, in progress or finished, so a repeat "inbox" adds nothing twice
@@ -64,6 +66,8 @@ function createReceiver({ server, token, dir, onEvent = () => {}, retries = RETR
   }
 
   async function fetchOne(t) {
+    // Read once per file, so choosing another inbox (3-3) applies from the next file on.
+    const dir = t.dir = t.dir || dirOf();
     const part = await inbox.partialPath(dir, t.id);
     let have = 0;
     try { have = (await fs.promises.stat(part)).size; } catch (e) { /* nothing yet */ }
@@ -118,7 +122,7 @@ function createReceiver({ server, token, dir, onEvent = () => {}, retries = RETR
     running = false;
   }
 
-  async function dropPart(t) { await fs.promises.rm(await inbox.partialPath(dir, t.id), { force: true }).catch(() => {}); }
+  async function dropPart(t) { await fs.promises.rm(await inbox.partialPath(t.dir || dirOf(), t.id), { force: true }).catch(() => {}); }
 
   return {
     // Transfers the HP says are waiting for this PC. Ones already known are skipped.

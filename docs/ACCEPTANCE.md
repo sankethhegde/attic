@@ -261,6 +261,26 @@ Tests: `tray-test.mjs` 19/19 on the development build, 20/20 on the packaged app
 
 For the final pass on the real machines: the notifications on the Acer for a file from the ROG Ally, and start-with-Windows after a real sign-in.
 
+## Phase 3, milestone 3-3: Hub Inbox and sending shortcuts (5 Nov 2026)
+
+3-3 has no server side. Everything below was checked in the real tool against a throwaway server, with a stand-in ROG Ally.
+
+| Check | Result | How it was verified |
+| --- | --- | --- |
+| Choose the Hub Inbox folder (T-07) | ✅ | Settings → Hub Inbox → Change folder: the next file from the Ally landed in the chosen folder, not the old one. A folder that isn't a full path is refused with the reason. Use the default puts files back in Downloads\Attic Hub Inbox |
+| Right-click "Send to Attic Hub" in File Explorer (T-06) | ✅ | Two launches as Explorer makes them (`--send` a file, `--send` a folder) opened one Send dialog: the file, plus the folder as "2 files". All three were queued for the Ally, and the file arrived byte for byte. In the packaged app, the switch adds the per-user entry for this program and removes it again; the test leaves none behind |
+| Retry for a file sent from Explorer | ✅ | After a reload, Retry sent it again from its path without asking (attempt 2) |
+| Drag a file onto the window to send it (T-08) | ✅ | "Drop to send to a device", then the Send dialog with the file, then sent. A drop on the Dashboard's Upload area still uploads to the HP |
+| Drag a file onto the tray icon (T-08) | ⛔ not possible on Windows | Electron (like Windows itself) only lets a tray icon take drops on macOS. The window and Explorer's right-click are the ways in |
+
+Tests: `shortcuts-test.mjs` 12/12 on the development build and on the packaged app. Also `node --test "agent/*.test.js"` 41/41, `node --test "server/*.test.js"` 148/148, `tray-test.mjs` 19/19, `mode-test.mjs` 14/14, `smoke-test.mjs` (0 console errors), `discovery-test.mjs` 13/13, `pairing-test.mjs` 19/19, `live-stats-test.mjs` 17/17, `send-test.mjs` 19/19 and `transfers-test.mjs` 17/17.
+
+Found during the run:
+- **A development launch sent its own folder.** Chromium moved the app's own "." argument after `--send`, and it was taken as a picked folder. Only full paths after `--send` are taken now, which is all File Explorer ever passes.
+- **The Settings hint grew with each change** (from 3-2): it added "(The installed Attic Hub only…)" again on every switch. It's now set fresh each time.
+
+For the final pass on the real machines: right-click a file on the Acer in Windows 11's File Explorer, and uninstall to see the entry go.
+
 ## Problems found and fixed during the run
 
 1. **Focus after navigation:** after opening a folder or tab, keyboard focus fell back to the top of the page, so you had to Tab through the header again. It now moves into the new content.

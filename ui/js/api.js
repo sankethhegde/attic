@@ -568,10 +568,20 @@
     },
 
     hasFileFor: id => sentFiles.has(id),
+    // A file sent from File Explorer (3-3) is sent by the desktop tool, which can send it again by its path.
+    async hasPathFor(id) { const d = root.atticDesktop && root.atticDesktop.send; return !!(d && await d.hasPath(id)); },
     isUploading: id => uploads.has(id),
-    // `file`: a File the person chose (it must be the same size), else the one this page sent before.
+    // `file`: a File the person chose (it must be the same size), else the one this page sent before, or
+    // (3-3) the one the desktop tool sent by its path.
     resendTransfer(t, file, onProgress = () => {}) {
       const src = file ? { file } : sentFiles.get(t.id);
+      if (!src && root.atticDesktop && root.atticDesktop.send) {
+        return { cancel() {}, promise: (async () => {
+          const r = await root.atticDesktop.send.resend(t);
+          if (!r || r.error) throw new ApiError('INVALID', (r && r.error) || 'Choose the file to send again.');
+          return r;
+        })() };
+      }
       if (!src) throw new ApiError('INVALID', 'Choose the file to send again.');
       if (file && file.size !== t.size) throw new ApiError('INVALID', `That file is ${U.formatBytes(file.size)}; ${t.fileName} was ${U.formatBytes(t.size)}. Choose the same file.`);
       let job = null, cancelled = false;
@@ -584,6 +594,21 @@
         try { return await job.promise; } finally { uploads.delete(t.id); }
       })();
       return { promise, cancel() { cancelled = true; if (job) job.cancel(); } };
+    },
+
+    // Files picked in File Explorer (3-3): known by their paths on this PC, which only the desktop tool can
+    // read, so it sends them. `files`: [{ path, name, size }]. Same shape back as sendToDevice.
+    sendLocalFiles({ files, to, onProgress = () => {} }) {
+      const d = root.atticDesktop && root.atticDesktop.send;
+      if (!d) throw new ApiError('INVALID', 'Only the Attic Hub desktop tool can send files from File Explorer.');
+      d.onProgress(p => onProgress({ phase: 'upload', name: p.name, loaded: p.loaded, total: p.total }));
+      return {
+        cancel() { d.cancel(); },
+        promise: d.upload(files.map(f => ({ path: f.path, name: f.name, size: f.size })), to.id).then(r => {
+          if (r && r.error) throw new ApiError(r.code || 'SERVER', r.error);
+          return r.transfers;
+        })
+      };
     },
 
     // ---------- send to a device (the HP's: 2-4) ----------

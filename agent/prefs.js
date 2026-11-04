@@ -1,5 +1,6 @@
-// prefs.js — Phase 3, milestone 3-2 (T-04, T-05): the desktop tool's own preferences, per PC, in the
-// tool's user-data folder (prefs.json): start with Windows, and which notifications to show.
+// prefs.js — Phase 3, milestones 3-2 and 3-3: the desktop tool's own preferences, per PC, in the tool's
+// user-data folder (prefs.json): start with Windows, which notifications to show, the Hub Inbox folder,
+// and File Explorer's "Send to Attic Hub".
 // Separate from the interface's settings, which live in the browser's storage and are per account.
 'use strict';
 const fs = require('fs');
@@ -9,12 +10,16 @@ const path = require('path');
 // so its window doesn't need to.
 // notify: received files, transfers this PC sent (delivered or failed), devices going and coming.
 // seen: the newest HP event already shown, per server, so a restart catches up without repeats.
+// 3-3: inboxDir, the Hub Inbox folder chosen in Settings (null: the default in Downloads), and
+// explorerMenu, "Send to Attic Hub" in File Explorer's right-click menu (on for a client).
 const NOTIFY = ['received', 'transfers', 'devices'];
 const defaults = mode => ({
   startWithWindows: mode !== 'server',
   notify: { received: true, transfers: true, devices: true },
   trayHintShown: false,
-  seen: {}
+  seen: {},
+  inboxDir: null,
+  explorerMenu: mode !== 'server'
 });
 
 function store(file) {
@@ -35,7 +40,9 @@ function store(file) {
         startWithWindows: typeof patch.startWithWindows === 'boolean' ? patch.startWithWindows : cur.startWithWindows,
         notify,
         trayHintShown: typeof patch.trayHintShown === 'boolean' ? patch.trayHintShown : cur.trayHintShown,
-        seen
+        seen,
+        inboxDir: patch.inboxDir === null || typeof patch.inboxDir === 'string' ? patch.inboxDir : cur.inboxDir,
+        explorerMenu: typeof patch.explorerMenu === 'boolean' ? patch.explorerMenu : cur.explorerMenu
       };
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file + '.tmp', JSON.stringify(next, null, 2));

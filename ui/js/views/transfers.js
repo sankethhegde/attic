@@ -195,7 +195,7 @@
         if (t.status === 'queued') return ui.toast(`${t.fileName} is queued again for ${t.toName || 'the device'}`);
         // The HP no longer has the file: send it again from here, or say where it has to come from.
         if (t.from !== myDevice) return ui.toast(`The HP needs ${t.fileName} again from ${t.fromName || 'the device that sent it'}. Retry it there.`);
-        if (api.hasFileFor(t.id)) resend(t);
+        if (api.hasFileFor(t.id) || await api.hasPathFor(t.id)) resend(t);
         else { ui.toast(`Choose ${t.fileName} again to send it`); chooseFile(t); }
       } catch (err) { ui.toast(err.message, 'error'); }
     });
