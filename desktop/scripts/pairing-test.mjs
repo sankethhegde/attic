@@ -60,6 +60,9 @@ function hp(method, url, body, from) {
 
 // ---- the desktop tool, driven over the DevTools protocol ----
 const profile = path.join(tmp, 'profile');
+// This test is about a client: answer the first-launch question (3-1) up front.
+fs.mkdirSync(profile, { recursive: true });
+fs.writeFileSync(path.join(profile, 'mode.json'), JSON.stringify({ mode: 'client' }));
 let tool = null, ws = null, id = 0;
 const pending = {};
 async function launchTool() {

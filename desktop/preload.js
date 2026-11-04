@@ -1,5 +1,6 @@
 // The bridge between the window and the desktop tool. It tells the interface it runs inside the tool,
 // and (Phase 2, 2-1) lets the start screen drive the search for the HP and Settings show or change it.
+// Phase 3, 3-1: the server-or-client choice, and Server mode's controls.
 const { contextBridge, ipcRenderer } = require('electron');
 
 const arg = name => {
@@ -32,5 +33,20 @@ contextBridge.exposeInMainWorld('atticDesktop', {
     path: () => ipcRenderer.invoke('inbox:path'),
     recent: () => ipcRenderer.invoke('inbox:recent'),
     open: () => ipcRenderer.invoke('inbox:open')
+  },
+  // This PC's role (3-1): the first-launch choice, and changing it later from Settings.
+  mode: {
+    choose: m => ipcRenderer.send('mode:choose', String(m)),
+    change: () => ipcRenderer.send('mode:change')
+  },
+  // Server mode's screen (3-1): set up the server, run it as a Windows service, and open its interface.
+  serverMode: {
+    state: () => ipcRenderer.invoke('server:state'),
+    pickFolder: title => ipcRenderer.invoke('server:pickFolder', String(title || '')),
+    setup: opts => ipcRenderer.invoke('server:setup', JSON.parse(JSON.stringify(opts || {}))),
+    forget: () => ipcRenderer.invoke('server:forget'),
+    action: name => ipcRenderer.invoke('server:action', String(name)),
+    open: () => ipcRenderer.invoke('server:open'),
+    controls: () => ipcRenderer.send('server:controls')
   }
 });

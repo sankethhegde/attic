@@ -47,9 +47,21 @@ Electron's binary download is an install script, which npm may hold for approval
 | `node scripts/live-stats-test.mjs [exe]` | The 2-3 flow end to end: after pairing, the tool's agent reports to a throwaway server; the Devices view goes live; a second device's report is timed to the screen |
 | `node scripts/send-test.mjs [exe]` | The 2-4 flow end to end: sends from the tool to an offline device, and to the tool while it's open and while it's closed, checking every file arrives intact in the Hub Inbox. `BIG=1` adds a 2 GB file |
 | `node scripts/transfers-test.mjs [exe]` | The 2-5 flow end to end: live progress, a finished transfer moving to History, Cancel, Retry (automatic, and after a reload by choosing the file), filters, search, paging, and 360px |
+| `node scripts/mode-test.mjs [exe]` | The 3-1 flow: the first-launch choice, Client remembered, Server set up new (and an existing folder checked), started without installing, opened as the HP, stopped. With an exe, also runs it the way the Windows startup task does |
 | `node scripts/serve-ui.js` | Serves `ui/` on localhost, to check it in a normal browser |
 
 ## First run
+
+The first time Attic Hub opens it asks one question: **is this PC the server, or a client?** (Phase 3, 3-1). Settings → Server → "This PC is" changes it later.
+
+- **A client** (the Acer, the ROG Ally) looks for the HP on the home network and opens the HP's interface. Everything in Phase 2 is the client's.
+- **The server** (the HP) shows Server mode's screen. Set the server up once, either as **a new server** (choose a folder for everyone's files; its settings and data go in `%APPDATA%\Attic Hub\server`) or with **an existing server folder**, such as the repository's `attic\server`, so its accounts, devices and history carry over. Then:
+  - **Install as a service** registers the Windows startup task from `server/service/` (Windows asks for permission once). From then on the server starts with Windows, before anyone signs in, and restarts after a crash.
+  - **Start now without installing** runs it only until Attic Hub closes.
+  - **Open Attic** shows the server's own interface. This PC is the HP, so it needs no pairing.
+  - Start, Stop, Restart, Remove the service, and the server's log are there too.
+
+The installed tool carries the whole server (`resources\server`) and runs it with its own built-in Node, so the HP needs nothing else installed. Windows' task starts `Attic Hub.exe ...\supervisor.js`; that run has no window.
 
 On a fresh server the interface shows setup for the master account, with a password you choose. The master then adds an account for each device from the Dashboard.
 

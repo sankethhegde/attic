@@ -5,10 +5,16 @@
 // window's session stores across restarts.
 // Milestone 2-3: once paired, the agent (agent/hub-agent.js) reports this PC's stats to the HP's live hub
 // every few seconds, using that cookie's token.
-// Tray, notifications, Explorer integration and Server/Client mode arrive in later phases.
-const { app, BrowserWindow, Menu, shell, ipcMain } = require('electron');
+// Phase 3, milestone 3-1 (T-02, T-03): the first launch asks whether this PC is the server or a client
+// (agent/mode.js). A client does all of the above. The server gets its own screen (ui/server.html):
+// set up a new server or use an existing server folder, then install it as a Windows startup task
+// (agent/server-control.js, over the HP's server/service/). The installed task runs this same program
+// with the supervisor's path as its argument; then it runs the supervisor without any window.
+// Tray, notifications and Explorer integration arrive in later milestones.
+const { app, BrowserWindow, Menu, shell, ipcMain, dialog } = require('electron');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 
 // What the pairing screen (2-2) suggests for this PC: its name, and Windows 10 or 11 (build 22000 and up).
 const HOSTNAME = os.hostname().slice(0, 64);
@@ -17,7 +23,36 @@ const OS_NAME = process.platform === 'win32' ? (Number(os.release().split('.')[2
 // Packaged builds carry ui/, agent/ and server/discovery.js inside the app; in development they sit
 // next to desktop/.
 const ROOT = app.isPackaged ? __dirname : path.join(__dirname, '..');
-const CONNECT_PAGE = path.join(ROOT, 'ui', 'connect.html');
+// The interface and the whole server ship as plain folders beside the app (resources\ui, resources\server),
+// so the startup task and the server read them from disk like any Node program.
+const RES = app.isPackaged ? process.resourcesPath : ROOT;
+const CONNECT_PAGE = path.join(RES, 'ui', 'connect.html');
+const SERVER_PAGE = path.join(RES, 'ui', 'server.html');
+const modeLib = require(path.join(ROOT, 'agent', 'mode.js'));
+const modeStore = modeLib.store(path.join(app.getPath('userData'), 'mode.json'));
+
+// ---------- the startup task (3-1) ----------
+// Windows starts "Attic Hub Server" as `Attic Hub.exe <...>\server\service\supervisor.js`. That run has
+// no window. It starts this same program again as plain Node (ELECTRON_RUN_AS_NODE, in the child's
+// environment only: Electron's own helper processes must not inherit it) to run the supervisor, pointed
+// at the folder chosen in Server mode, and lives exactly as long as the supervisor does, so Windows sees
+// the task running and its restart-on-failure applies.
+const SUPERVISOR_ARG = (a => a && path.resolve(a))(process.argv.slice(1).find(a => /[\\/]service[\\/]supervisor\.js$/i.test(a)));
+if (SUPERVISOR_ARG) {
+  app.disableHardwareAcceleration();
+  const m = modeStore.load();
+  if (!m || m.mode !== 'server' || !m.server) {
+    console.error('Attic Hub: this PC isn’t set up as the server. Open Attic Hub and choose Server mode.');
+    app.exit(2);
+  } else {
+    const sup = require('child_process').spawn(process.execPath, [SUPERVISOR_ARG], {
+      cwd: path.dirname(path.dirname(SUPERVISOR_ARG)), stdio: 'ignore', windowsHide: true,
+      env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1', ATTIC_DATA: m.server.data, ATTIC_CONFIG: m.server.config })
+    });
+    sup.on('exit', code => app.exit(code == null ? 1 : code));
+    sup.on('error', () => app.exit(1));
+  }
+}
 const connect = require(path.join(ROOT, 'agent', 'connect.js'));
 const { createAgent, hubUrl } = require(path.join(ROOT, 'agent', 'hub-agent.js'));
 const { createCollector } = require(path.join(ROOT, 'agent', 'stats.js'));
@@ -44,8 +79,13 @@ let collect = null;        // made once, so its CPU meter keeps measuring betwee
 let receiver = null;       // collects files sent to this PC into the Hub Inbox (2-4), alongside the agent
 const received = [];       // the latest files received this session, newest first, for Settings
 
-// One window only: a second launch focuses the first.
-if (!app.requestSingleInstanceLock()) {
+let mode = null;            // { mode: 'client' | 'server', server?: { dir, config, data } } (mode.json)
+let control = null;         // Server mode's controls (agent/server-control.js), for mode.server
+
+// One window only: a second launch focuses the first. The startup task's run above is not a window.
+if (SUPERVISOR_ARG) {
+  // nothing else to do: the supervisor runs until it's asked to stop
+} else if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => {
@@ -56,13 +96,65 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     saved = connect.store(path.join(app.getPath('userData'), 'server.json'));
     remembered = saved.load();
+    mode = modeStore.load();
     createWindow();
-    startSearch();
+    start();
   });
+  // "Start now" runs the server as a child of the tool; it stops with the tool.
+  app.on('before-quit', () => { if (control) control.stopChild(); });
+}
+
+// What the window shows first: the choice (first launch), the search for the HP, or the server's screen.
+function start() {
+  if (!mode) return showChooser();
+  if (mode.mode === 'server') return showServerPage();
+  startSearch();
+}
+function showChooser(extra = {}) {
+  stopAgent();
+  server = null;
+  showStartScreen();
+  sendState(Object.assign({ state: 'mode', current: mode && mode.mode }, extra));
+}
+
+// ---------- Server mode (3-1) ----------
+const NEW_SERVER_DIR = path.join(app.getPath('userData'), 'server');
+function getControl() {
+  if (!mode || mode.mode !== 'server' || !mode.server) return null;
+  if (control && control.dir === mode.server.dir) return control;
+  if (control) control.stopChild();
+  const service = require(path.join(RES, 'server', 'service', 'service.js'));
+  // Installed: the task runs this program (see SUPERVISOR_ARG). A development copy can try the server
+  // ("start now") but doesn't install a task that points at a development folder.
+  const supervisor = path.join(RES, 'server', 'service', 'supervisor.js');
+  control = require(path.join(ROOT, 'agent', 'server-control.js')).createControl({
+    paths: mode.server, service, exe: process.execPath, supervisor, workDir: path.dirname(path.dirname(supervisor)),
+    nodeEnv: { ELECTRON_RUN_AS_NODE: '1' }, canInstall: app.isPackaged
+  });
+  control.dir = mode.server.dir;
+  return control;
+}
+function showServerPage() {
+  stopAgent();
+  server = null;
+  clearInterval(heartbeat);
+  const here = win.webContents.getURL();
+  if (!here.startsWith('file://') || !here.endsWith('server.html')) win.loadFile(SERVER_PAGE);
+}
+// The HP's own interface, from this PC: it's trusted as the HP, so it needs no pairing.
+async function openOwnServer() {
+  const c = getControl();
+  const st = await c.status();
+  if (!st.server) throw new Error('The server isn’t running. Start it first.');
+  server = { serverId: st.server.serverId, name: st.server.name, address: 'localhost', port: st.port };
+  win.loadURL(c.url());
+  clearInterval(heartbeat);
+  heartbeat = setInterval(checkStillThere, HEARTBEAT_MS);
 }
 
 const originOf = s => connect.urlFor(s).replace(/\/$/, '');
-const onStartScreen = () => win && win.webContents.getURL().startsWith('file://');
+// The start screen is connect.html; Server mode's own screen (server.html) is a different page.
+const onStartScreen = () => win && /^file:.*connect\.html/.test(win.webContents.getURL());
 // Messages are accepted only from the start screen or the confirmed server's own pages.
 const trusted = e => {
   const url = (e.senderFrame && e.senderFrame.url) || '';
@@ -163,6 +255,7 @@ async function checkStillThere() {
     misses = 0;
     const lost = server;
     server = null;
+    if (mode && mode.mode === 'server') return showServerPage(); // this PC's own server stopped
     startSearch({ mode: 'lost', lost: { name: lost.name } });
   }
 }
@@ -187,8 +280,64 @@ ipcMain.on('hub:connectTo', async (e, text) => {
   catch (err) { sendState({ state: 'typed-error', message: err.message, address: String(text) }); }
 });
 ipcMain.handle('hub:current', e => trusted(e) && server
-  ? { name: server.name, address: server.address, port: server.port, serverId: server.serverId, url: connect.urlFor(server), agent: agentState } : null);
+  ? { name: server.name, address: server.address, port: server.port, serverId: server.serverId, url: connect.urlFor(server), agent: agentState,
+      mode: mode ? mode.mode : null } : null);
 ipcMain.on('hub:change', e => { if (trusted(e)) { server = null; startSearch({ mode: 'change' }); } });
+
+// ---------- the role: server or client (3-1) ----------
+ipcMain.on('mode:choose', (e, m) => {
+  if (!trusted(e) || !modeLib.MODES.includes(m)) return;
+  const was = mode;
+  // Back to Server mode keeps its folder; anything else starts that mode fresh.
+  mode = modeStore.save(m === 'server' && was && was.server ? { mode: 'server', server: was.server } : { mode: m });
+  start();
+});
+ipcMain.on('mode:change', e => { if (trusted(e)) showChooser({ changing: true }); });
+
+ipcMain.handle('server:state', async e => {
+  if (!trusted(e)) return null;
+  const c = getControl();
+  const drives = ['D', 'E', 'C'].filter(d => fs.existsSync(d + ':\\'));
+  return {
+    configured: !!c, paths: mode && mode.server, newDir: NEW_SERVER_DIR, installable: app.isPackaged,
+    suggestedStorage: `${drives[0] || 'C'}:\\Attic`,
+    status: c ? await c.status() : null, logs: c ? c.logs(30) : []
+  };
+});
+ipcMain.handle('server:pickFolder', async (e, title) => {
+  if (!trusted(e)) return null;
+  const r = await dialog.showOpenDialog(win, { title: String(title || 'Choose a folder'), properties: ['openDirectory', 'createDirectory'] });
+  return r.canceled ? null : r.filePaths[0];
+});
+// Set up: a new server in the tool's folder, or an existing server folder. Errors come back as text.
+ipcMain.handle('server:setup', async (e, opts) => {
+  if (!trusted(e)) return { error: 'Not allowed' };
+  try {
+    const p = opts && opts.existing ? modeLib.checkExisting(opts.existing)
+      : modeLib.createServer(NEW_SERVER_DIR, { shares: (opts && opts.shares) || [], port: opts && opts.port });
+    mode = modeStore.save({ mode: 'server', server: { dir: p.dir, config: p.config, data: p.data } });
+    return { ok: true };
+  } catch (err) { return { error: err.message }; }
+});
+// Forget the folder (nothing on disk is deleted), to set up again.
+ipcMain.handle('server:forget', async e => {
+  if (!trusted(e)) return null;
+  if (control) { await control.stop().catch(() => {}); control = null; }
+  mode = modeStore.save({ mode: 'server' });
+  return { ok: true };
+});
+ipcMain.handle('server:action', async (e, name) => {
+  if (!trusted(e)) return { error: 'Not allowed' };
+  const c = getControl();
+  const fn = c && { install: c.install, remove: c.remove, start: c.start, stop: c.stop, restart: c.restart, startNow: c.startNow }[name];
+  if (!fn) return { error: 'Set up the server first.' };
+  try { await fn(); return { ok: true }; } catch (err) { return { error: err.message }; }
+});
+ipcMain.handle('server:open', async e => {
+  if (!trusted(e)) return { error: 'Not allowed' };
+  try { await openOwnServer(); return { ok: true }; } catch (err) { return { error: err.message }; }
+});
+ipcMain.on('server:controls', e => { if (trusted(e) && mode && mode.mode === 'server') showServerPage(); });
 
 // The Hub Inbox (2-4): where it is, and opening it in File Explorer (made first if nothing has arrived yet).
 ipcMain.handle('inbox:path', e => trusted(e) ? INBOX : null);
@@ -232,7 +381,7 @@ function createWindow() {
     if (removed) { if (cookie.value === agentToken) stopAgent(); }
     else startAgent();
   });
-  win.loadFile(CONNECT_PAGE);
+  win.loadFile(mode && mode.mode === 'server' ? SERVER_PAGE : CONNECT_PAGE);
 
   // The window shows only the start screen and the confirmed server's pages. Anything else (the
   // requirements doc, for example) opens in the default browser.
@@ -251,10 +400,11 @@ function createWindow() {
     if (!isMainFrame || code === -3 || !server || !url.startsWith(originOf(server))) return; // -3: navigation replaced
     const lost = server;
     server = null;
+    if (mode && mode.mode === 'server') return showServerPage();
     startSearch({ mode: 'lost', lost: { name: lost.name } });
   });
 
   win.on('closed', () => { stopAgent(); win = null; clearInterval(heartbeat); });
 }
 
-app.on('window-all-closed', () => app.quit());
+app.on('window-all-closed', () => { if (!SUPERVISOR_ARG) app.quit(); });

@@ -16,6 +16,9 @@ const exe = process.argv[2];
 const CDP_PORT = 9341, HTTP_PORT = 8090;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'attic-hub-test-'));
 const profile = path.join(tmp, 'profile');
+// This test is about a client: answer the first-launch question (3-1) up front.
+fs.mkdirSync(profile, { recursive: true });
+fs.writeFileSync(path.join(profile, 'mode.json'), JSON.stringify({ mode: 'client' }));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // A small share with a folder of documents and a few media files.
