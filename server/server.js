@@ -662,6 +662,16 @@ server.on('upgrade', (req, socket) => {
 });
 const NOT_PAIRED_BODY = { code: 'NOT_PAIRED', message: 'This device isn’t paired with the HP yet. Ask for a pairing code on the HP.' };
 
+// Run by the supervisor (Phase 3, 3-1): if it goes (the Windows task was stopped), so does the server,
+// rather than holding the port with nobody to restart it.
+if (process.env.ATTIC_SUPERVISOR_PID) {
+  const sup = +process.env.ATTIC_SUPERVISOR_PID;
+  setInterval(() => {
+    try { process.kill(sup, 0); }
+    catch (e) { if (e.code !== 'EPERM') { console.log('Supervisor gone; stopping.'); process.exit(0); } }
+  }, 2000).unref();
+}
+
 server.on('error', e => {
   console.error(e.code === 'EADDRINUSE' ? `Port ${CONFIG.port} is already in use.` : e.message);
   process.exit(1);
