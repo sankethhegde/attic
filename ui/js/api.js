@@ -588,28 +588,62 @@
       return Object.assign({}, x);
     },
 
-    // ---------- send to a device (2-4: mock until the HP's transfer endpoints exist) ----------
-    // `items`: [{ name, size, count? }], one per file or folder; `from` and `to`: devices from listHubDevices.
-    // Adds sample transfers to the Transfers tab: sending now if the device is online, waiting if not.
-    // Nothing leaves this browser. When the HP's endpoints land, this becomes the real call.
-    sendIsSample: true,
-    async sendToDevice({ items, from, to }) {
-      await delay(true);
-      const session = sessionOrThrow();
-      if (!to || (from && to.id === from.id)) throw new ApiError('INVALID', 'Choose another device to send to.');
-      if (!items || !items.length) throw new ApiError('INVALID', 'Choose at least one file.');
-      const hub = hubData();
-      const t = new Date().toISOString();
-      const made = items.map((it, i) => {
-        const x = { id: 'tr_s' + Date.now().toString(36) + i, userId: session.accountId, error: null, fileName: it.name, size: Math.max(1, it.size || 0),
-          count: it.count || 1, from: from ? from.id : null, fromName: from ? from.name : 'This device', fromKind: from ? from.kind : 'desktop',
-          to: to.id, toName: to.name, toKind: to.kind, status: to.online ? 'active' : 'queued', speed: to.online ? 24e6 : null,
-          startedAt: t, finishedAt: null, bytesDone: 0 };
-        hub.transfers.push(x);
-        return Object.assign({}, x);
+    // ---------- send to a device (the HP's: 2-4) ----------
+    // Each file goes in two steps: say what's coming (POST /api/transfers), then stream exactly that many
+    // bytes (PUT …/file). The HP holds it until the receiving device's agent collects it, at once if it's
+    // online, otherwise when it next connects. `files`: [{ name, size, source }] where `source` is a File
+    // from this device, or `entry`, a file already on the HP, which the browser fetches first (the HP has
+    // no copy-in-place for transfers). `onProgress({ phase: 'fetch' | 'upload', name, loaded, total })`.
+    // Returns { cancel, promise }; the promise resolves with the transfers, now queued on the HP.
+    sendToDevice({ files, to, onProgress = () => {} }) {
+      let xhr = null, current = null, cancelled = false;
+      const total = files.reduce((a, f) => a + f.size, 0);
+      const putFile = (t, body, done, name) => new Promise((resolve, reject) => {
+        xhr = new XMLHttpRequest();
+        xhr.open('PUT', `/api/transfers/${encodeURIComponent(t.id)}/file`);
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+        xhr.setRequestHeader('X-Attic-Upload', '1');
+        xhr.upload.onprogress = e => onProgress({ phase: 'upload', name, loaded: done + e.loaded, total });
+        xhr.onload = () => {
+          let data = null;
+          try { data = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
+          if (xhr.status === 200) return resolve(data);
+          reject(new ApiError((data && data.code) || 'SERVER', (data && data.message) || 'Sending failed.'));
+        };
+        xhr.onerror = () => reject(new ApiError('UNREACHABLE', 'Could not reach the server.'));
+        xhr.onabort = () => reject(new ApiError('CANCELLED', 'Cancelled'));
+        xhr.send(body);
       });
-      saveHub(hub);
-      return made;
+      const promise = (async () => {
+        if (!to) throw new ApiError('INVALID', 'Choose a device to send to.');
+        if (!files.length) throw new ApiError('INVALID', 'Choose at least one file.');
+        const out = [];
+        let done = 0;
+        for (const f of files) {
+          if (cancelled) throw new ApiError('CANCELLED', 'Cancelled');
+          let body = f.source;
+          if (!body) {
+            onProgress({ phase: 'fetch', name: f.name, loaded: done, total });
+            const res = await fetch(api.downloadUrl(f.entry), { credentials: 'same-origin' }).catch(() => null);
+            if (!res || !res.ok) throw new ApiError('UNREACHABLE', `Couldn’t read ${f.name} from the HP.`);
+            body = await res.blob();
+          }
+          current = await http('POST', '/api/transfers', { to: to.id, fileName: f.name, size: body.size });
+          out.push(await putFile(current, body, done, f.name));
+          current = null;
+          done += f.size;
+          onProgress({ phase: 'upload', name: f.name, loaded: done, total });
+        }
+        return out;
+      })();
+      return {
+        promise,
+        cancel() {
+          cancelled = true;
+          if (xhr) xhr.abort();
+          if (current) http('DELETE', '/api/transfers/' + encodeURIComponent(current.id), {}).catch(() => {});
+        }
+      };
     },
 
     // ---------- upload (real, to the HP: milestone 5) ----------

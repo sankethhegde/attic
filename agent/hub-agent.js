@@ -5,15 +5,17 @@
 // every `interval` ms. A dropped connection is retried with a growing wait (1 s up to 30 s). Close code
 // 4001 means this PC was unpaired, and 4000 that a newer agent took over; both stop it for good.
 // Uses the WebSocket built into Node and Electron, which can send the header.
+// From 2-4 the HP also tells the agent about files sent to this PC ("inbox", "transfer",
+// "transfer-cancelled"); those go to `onMessage`, which hands them to receiver.js.
 'use strict';
 
 const BACKOFF = [1000, 2000, 4000, 8000, 15000, 30000];
 
 function hubUrl(server) { return `ws://${server.address}:${server.port}/api/hub?role=agent`; }
 
-// opts: { url, token, collect, onState(state, detail), WebSocketImpl }
+// opts: { url, token, collect, onState(state, detail), onMessage(msg), WebSocketImpl }
 // States: 'connecting', 'reporting', 'retrying' (detail: ms until the next try), 'unpaired', 'replaced', 'stopped'.
-function createAgent({ url, token, collect, onState = () => {}, WebSocketImpl = globalThis.WebSocket, backoff = BACKOFF }) {
+function createAgent({ url, token, collect, onState = () => {}, onMessage = () => {}, WebSocketImpl = globalThis.WebSocket, backoff = BACKOFF }) {
   let ws = null, timer = 0, retry = 0, tries = 0, stopped = false, state = null, sending = false;
   const set = (s, detail) => { state = s; onState(s, detail); };
 
@@ -30,7 +32,7 @@ function createAgent({ url, token, collect, onState = () => {}, WebSocketImpl = 
         tries = 0;
         set('reporting');
         loop(Math.max(1000, Number(msg.interval) || 3000), mine);
-      }
+      } else onMessage(msg);
     };
     ws.onerror = () => { /* onclose follows */ };
     ws.onclose = ev => {

@@ -61,7 +61,7 @@
       </div>
       ${statsHTML(d, master)}
       <div class="hub-actions">
-        ${d.thisPC ? '' : `<button class="btn btn-secondary btn-sm" data-send="${U.esc(d.id)}">${U.icon('transfer')}Send a file</button>`}
+        ${d.thisPC || d.role === 'server' ? '' : `<button class="btn btn-secondary btn-sm" data-send="${U.esc(d.id)}">${U.icon('transfer')}Send a file</button>`}
         ${master && d.role !== 'server' ? `<button class="btn btn-ghost btn-sm" data-unpair="${U.esc(d.id)}">${U.icon('x')}Unpair</button>` : ''}
       </div>
     </article>`;

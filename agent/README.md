@@ -38,23 +38,34 @@ The Devices view opens the same hub without `role` (`api.openHub`). It gets the 
 
 Tests: `node --test "agent/*.test.js"` (the agent's logic and the collector, offline), and `desktop/scripts/live-stats-test.mjs`. The second pairs the real tool with a throwaway server, checks its reports reach the HP, and plays a second device's agent to time a report reaching the master's screen.
 
-## Send to device and the Hub Inbox (milestone 2-4, D-05 and D-07) — the parts that don't need the HP
+## Send to device and the Hub Inbox (milestone 2-4, D-05 and D-07) — built
 
-- **`inbox.js`** saves files sent to this PC into the Hub Inbox, by default `Downloads\Attic Hub Inbox`. It works however the HP ends up delivering them:
-  - Names are made safe on Windows: reserved characters, device names like `CON`, trailing dots, and very long names.
-  - A folder's path can't climb out of the inbox (`..` is dropped).
-  - An existing file is never overwritten: a clash becomes `name (2).ext`.
-  - Bytes go to `name.part` and are renamed only once complete and the right size. A broken transfer leaves nothing behind.
-- **Settings → Server → Hub Inbox** shows the folder and opens it in File Explorer. Choosing another folder is milestone 3-3 (T-07).
-- **The Send dialog** (`ui/js/views/send.js`) is described in the main README.
+Every file goes through the HP, which holds it until the receiving device collects it. The server's side is in [server/README.md](../server/README.md#send-to-device-and-the-offline-queue-phase-2-milestone-2-4-d-05-and-d-07).
 
-**Waiting for the HP's transfer endpoints**, and not guessed at:
-- `api.sendToDevice` is a sample. It adds transfers to the Transfers tab and sends nothing; the dialog says so.
-- Uploading the chosen local files, and the agent's delivery hook that calls `inbox.receive()`, follow the HP's contract once it exists.
+**Sending** happens in the interface (`ui/js/views/send.js` and `api.sendToDevice`), so it works the same in a browser.
+- Each file is announced with `POST /api/transfers { to, fileName, size }`, then streamed with `PUT /api/transfers/:id/file`, with progress shown.
+- A folder goes as its files, one by one, because a transfer carries one file name.
+- A file already on the HP (Files → Send to device) is read back from the HP first, because the HP has no copy-in-place for transfers.
 
-Tests: `node --test "agent/*.test.js"` covers `inbox.js`.
+**Receiving** is the agent's job, in the desktop tool's main process:
+- **`receiver.js`** listens on the agent's hub connection:
+  - `{"type":"inbox","transfers":[…]}` arrives on every connect: the offline queue.
+  - `{"type":"transfer"}` arrives the moment something new is sent to this PC.
+- **One file at a time**, it downloads `GET /api/transfers/:id/file` with the device token, checks the size, moves the file into the inbox, and confirms with `POST …/received`.
+  - A dropped connection resumes with `Range` from the part file, after 2, 5 and 15 s. Past that, the HP lists the file again on the next connect.
+  - A file this PC can't save (disk full, no permission) is reported with `POST …/failed`.
+  - `transfer-cancelled` drops the download, part file and all.
+- **`inbox.js`** is the file-system side, in `Downloads\Attic Hub Inbox` (`ATTIC_INBOX` overrides it, for tests):
+  - Windows-safe names, and a clash becomes `name (2).ext` rather than an overwrite.
+  - Downloads in progress sit in the hidden `.attic-partial` folder, named by transfer, so they can resume.
+- **Settings → Server → Hub Inbox** shows the folder, opens it, and lists what arrived this session. Choosing another folder is milestone 3-3 (T-07).
+
+Only a device whose agent is running collects files. A device that's online only through its browser (`browserOnly`) gets the file later, and the Send dialog says so.
+
+Tests:
+- `node --test "agent/*.test.js"` covers `inbox.js`, and `receiver.js` against a stand-in HP: confirming, resuming, and cancelled transfers.
+- `desktop/scripts/send-test.mjs` runs the real tool against a throwaway server, sending both ways, including a file sent while the tool was closed. `BIG=1` adds a 2 GB file.
 
 ## Still to come
 
-- **2-4, the delivery itself**, once the HP's transfer endpoints exist.
-- **2-5:** the Transfers view on real data. It shows sample data from `ui/js/mockgen.js` until then.
+- **2-5:** the Transfers view on real data (progress, Retry, history). It shows sample data from `ui/js/mockgen.js` until then.

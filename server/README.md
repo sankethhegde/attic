@@ -4,7 +4,7 @@ The server that runs on the HP laptop. Built one milestone at a time from `docs/
 
 **Now: milestones 1–6, the whole brief.** Core Node only, no install step. It serves `ui/`, reports the real drives, owns accounts, passwords and sessions, browses, downloads and uploads real folders, enforces who owns what, and indexes every share for Photos, Videos, Other and the Dashboard. The browser's file mock is gone; only Devices and Transfers keep sample data, until Phase 2.
 
-**Phase 2 on the server:** discovery (2-1) answers clients looking for the HP on the home network, pairing (2-2) lets only devices the master approved use it, and the live hub (2-3) carries each device's stats to the master as they change. Transfers follow.
+**Phase 2 on the server:** discovery (2-1) answers clients looking for the HP on the home network, pairing (2-2) lets only devices the master approved use it, the live hub (2-3) carries each device's stats to the master as they change, and transfers (2-4) send a file to another device through the HP, holding it while that device is offline. Live transfer progress and history follow in 2-5.
 
 ## Run it
 
@@ -217,6 +217,42 @@ The Devices view goes live through one WebSocket, `GET /api/hub`. `hub.js` keeps
 - The latest stats are kept in `server/data/device-stats.json`, written at most every 30 seconds and when an agent disconnects.
 
 `hub.test.js` plays both an agent on "another machine" (127.0.0.2) and the interface on the HP.
+
+## Send to device and the offline queue (Phase 2, milestone 2-4, D-05 and D-07)
+
+Every client talks only to the HP, so a file from the Acer to the ROG Ally goes in two legs. `transfers.js` holds it in between. This is the HP's half of 2-4; the "Send a file" button, the device picker, and the agent saving into the Hub Inbox are the Acer's half.
+
+1. **Upload.** The sender says what's coming (`POST /api/transfers { to, fileName, size }`), then streams exactly that many bytes (`PUT /api/transfers/:id/file`, with `X-Attic-Upload: 1`). The HP spools the file to `server/data/transfers/<id>.bin`, or to the folder named in `"transferSpool"` in `config.json`. The transfer is then `queued`.
+2. **Delivery.** If the receiving device's agent is connected to the hub, it gets `{"type":"transfer","transfer":{…}}` at once. If not, then when it next connects, its first message after `hello` is `{"type":"inbox","transfers":[…]}` with everything waiting for it. That is the offline queue. It downloads `GET /api/transfers/:id/file` (resumable with `Range`) and confirms with `POST /api/transfers/:id/received`. The HP then deletes its copy.
+
+**Statuses** use the Transfers view's words: `active` (with `stage` `upload` or `deliver`), `queued`, `done`, `failed` and `cancelled`. `speed` (the delivery) and `uploadSpeed` are averages in bytes per second, recorded at the end. Live progress, Retry and history are 2-5.
+
+| Route | Who | Does |
+| --- | --- | --- |
+| `GET /api/transfers` | signed in | Master: every transfer. Others: the ones they sent, and the ones to the device they're on. Newest first |
+| `POST /api/transfers` | signed in, on a paired device | `{ to, fileName, size }` → `201`, `active` / `upload` |
+| `PUT /api/transfers/:id/file` | the sender, on the same device | The file, exactly `size` bytes → `queued` |
+| `DELETE /api/transfers/:id` | the sender or the master | Cancel. An upload still arriving stops; the HP's copy is deleted; the receiving agent gets `{"type":"transfer-cancelled","id"}` |
+| `GET /api/inbox` | the receiving device | What's waiting for it |
+| `GET /api/transfers/:id/file` | the receiving device | Download, `Range` supported |
+| `POST /api/transfers/:id/received` | the receiving device | Saved whole → `done` |
+| `POST /api/transfers/:id/failed` | the receiving device | `{ error }`: it couldn't save the file → `failed` (the HP keeps its copy until it expires) |
+
+**The receiving end is a device, not an account.** Its agent calls with the device token alone (`X-Attic-Device`), as on the hub; an interface signed in on that device works too. No other device or account can fetch the file: the sender, the master's browser and other devices all get "not found". The HP itself doesn't receive transfers; to put a file on the HP, upload it in Files.
+
+**Rules**
+- **Names** must be one file name that Windows can store (the same rules as share paths), up to 200 characters. Shortcuts (`.lnk`, `.url`, `.scf`) are refused. A folder goes as files, or zipped, by the sender.
+- **Size:** at most 20 GB, as for uploads. The body must be exactly the declared size; anything else fails the transfer and leaves nothing behind. The HP refuses a transfer that would leave its drive with less than 1 GB free (`507 DISK_FULL`). Each account can have 50 unfinished transfers.
+- **Expiry:** a file nobody collects within 14 days is deleted and the transfer fails. The HP checks hourly.
+- **Restarts:** queued files survive them. An upload cut off by a restart fails; a delivery cut off goes back to `queued`. Spool files with no open transfer are deleted at start-up.
+- **Unpairing** a device cancels everything that was waiting for it.
+- **Live updates:** every change goes to the master's viewers, the sender's, and any on the receiving device, as `{"type":"transfer","transfer":{…}}`.
+
+`transfers.test.js` covers both Phase 2 acceptance checks for transfers:
+- A 2 GB file sent from the "Acer" arrives complete in the "ROG Ally's" inbox. The SHA-256 matches end to end, and it took about 17 s on this PC's loopback.
+- A transfer to an offline device waits through an HP restart and is delivered when the device comes online.
+
+It also covers resuming, who may fetch, cancelling mid-upload, unpairing, expiry and bad input. `test-util.js` holds the helpers it shares.
 
 ## Rules that carry over
 

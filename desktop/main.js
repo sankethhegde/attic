@@ -22,7 +22,9 @@ const connect = require(path.join(ROOT, 'agent', 'connect.js'));
 const { createAgent, hubUrl } = require(path.join(ROOT, 'agent', 'hub-agent.js'));
 const { createCollector } = require(path.join(ROOT, 'agent', 'stats.js'));
 const inbox = require(path.join(ROOT, 'agent', 'inbox.js'));
-const INBOX = inbox.defaultFolder(); // where received files land (2-4); choosing another is 3-3
+const { createReceiver } = require(path.join(ROOT, 'agent', 'receiver.js'));
+// Where received files land (2-4); choosing another is 3-3. ATTIC_INBOX points tests elsewhere.
+const INBOX = process.env.ATTIC_INBOX || inbox.defaultFolder();
 let si = null;
 try { si = require('systeminformation'); } catch (e) { /* battery unknown, network guessed by name */ }
 
@@ -39,6 +41,8 @@ let agent = null;          // the live-stats agent for `server`, while this PC i
 let agentToken = null;
 let agentState = 'off';
 let collect = null;        // made once, so its CPU meter keeps measuring between reports
+let receiver = null;       // collects files sent to this PC into the Hub Inbox (2-4), alongside the agent
+const received = [];       // the latest files received this session, newest first, for Settings
 
 // One window only: a second launch focuses the first.
 if (!app.requestSingleInstanceLock()) {
@@ -127,11 +131,22 @@ async function startAgent() {
   stopAgent();
   collect = collect || createCollector({ si });
   agentToken = c.value;
-  agent = createAgent({ url: hubUrl(s), token: c.value, collect, onState: st => { agentState = st; } });
+  // Files sent to this PC (2-4) are announced over the same connection and collected into the Hub Inbox.
+  receiver = createReceiver({ server: s, token: c.value, dir: INBOX, onEvent: ev => {
+    if (ev.type === 'received') received.unshift({ name: path.basename(ev.path), path: ev.path, size: ev.transfer.size, at: new Date().toISOString() });
+    received.length = Math.min(received.length, 20);
+  } });
+  agent = createAgent({ url: hubUrl(s), token: c.value, collect, onState: st => { agentState = st; }, onMessage: msg => {
+    if (msg.type === 'inbox') receiver.add(msg.transfers);
+    else if (msg.type === 'transfer' && msg.transfer) receiver.add([msg.transfer]);
+    else if (msg.type === 'transfer-cancelled') receiver.cancel(msg.id);
+  } });
 }
 function stopAgent() {
   if (agent) agent.stop();
+  if (receiver) receiver.stop();
   agent = null;
+  receiver = null;
   agentToken = null;
   agentState = 'off';
 }
@@ -177,6 +192,7 @@ ipcMain.on('hub:change', e => { if (trusted(e)) { server = null; startSearch({ m
 
 // The Hub Inbox (2-4): where it is, and opening it in File Explorer (made first if nothing has arrived yet).
 ipcMain.handle('inbox:path', e => trusted(e) ? INBOX : null);
+ipcMain.handle('inbox:recent', e => trusted(e) ? received.map(r => ({ name: r.name, size: r.size, at: r.at })) : []);
 ipcMain.handle('inbox:open', async e => {
   if (!trusted(e)) return 'Not allowed';
   try { await require('fs').promises.mkdir(INBOX, { recursive: true }); } catch (err) { return err.message; }

@@ -11,9 +11,7 @@
   };
 
   function rowHTML(x, devs) {
-    // Sample transfers name the sample devices; ones sent from the Send dialog (2-4) carry their names.
-    const from = devs.get(x.from) || (x.fromName && { name: x.fromName, kind: x.fromKind }),
-      to = devs.get(x.to) || (x.toName && { name: x.toName, kind: x.toKind });
+    const from = devs.get(x.from), to = devs.get(x.to);
     const name = d => d ? U.esc(d.name) : 'Removed device';
     const art = d => root.Attic.device.art(d ? d.kind : 'desktop', 20);
     const [cls, icon, label] = STATUS[x.status] || STATUS.done;

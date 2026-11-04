@@ -54,6 +54,8 @@
         <div class="set-row"><div class="lbl">Hub Inbox<small>Files other devices send to this PC land here, private to you. Choosing another folder comes in a later update.</small></div>
           <div class="ctl" style="flex-wrap:wrap;justify-content:flex-end;gap:8px"><span class="mono" id="inbox-path" style="font-size:12.5px;word-break:break-all"></span>
             <button class="btn btn-secondary btn-sm" id="inbox-open">${U.icon('folder')}Open folder</button></div></div>
+        <div class="set-row" id="inbox-recent-row" hidden><div class="lbl">Received<small>The latest files that arrived while the tool was open.</small></div>
+          <div class="ctl"><ul class="inbox-recent" id="inbox-recent"></ul></div></div>
         <div class="set-row"><div class="lbl">Use another server<small>Search the network again, or type an address. You’ll sign in on the server you pick.</small></div>
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="srv-change">${U.icon('refresh')}Change server</button></div></div>
       </section>` : ''}
@@ -128,6 +130,12 @@
       // Phase 2, 2-4: the Hub Inbox folder.
       if (root.atticDesktop.inbox) {
         root.atticDesktop.inbox.path().then(p => { main.querySelector('#inbox-path').textContent = p || ''; }).catch(() => {});
+        root.atticDesktop.inbox.recent().then(list => {
+          if (!list || !list.length) return;
+          main.querySelector('#inbox-recent-row').hidden = false;
+          main.querySelector('#inbox-recent').innerHTML = list.slice(0, 5).map(r =>
+            `<li><span class="nm">${U.nameHTML(r.name)}</span><span class="c"><span class="mono">${U.formatBytes(r.size)}</span> · ${U.relDate(r.at)}</span></li>`).join('');
+        }).catch(() => {});
         main.querySelector('#inbox-open').onclick = async () => {
           const err = await root.atticDesktop.inbox.open().catch(e => e.message);
           if (err) ui.toast('Couldn’t open the Hub Inbox: ' + err, 'error');

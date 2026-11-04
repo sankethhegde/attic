@@ -39,4 +39,4 @@ function createSafePath(shares) {
   };
 }
 
-module.exports = { createSafePath };
+module.exports = { createSafePath, segmentOk };

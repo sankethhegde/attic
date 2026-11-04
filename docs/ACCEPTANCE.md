@@ -180,23 +180,29 @@ Tests: `live-stats-test.mjs` 17/17 (dev build and packaged), `pairing-test.mjs` 
 
 Still to do with the real machines: once the Acer is paired with the real HP, open Devices on the HP and watch the Acer's card. Then the ROG Ally, the second client from 2-3 on.
 
-## Phase 2, milestone 2-4: send to device, the Acer's half so far (4 Nov 2026)
+## Phase 2, milestone 2-4: send to device and the Hub Inbox, the Acer's half (4 Nov 2026)
 
-The HP's transfer endpoints don't exist yet. This is everything on the Acer's side that doesn't depend on them. The send itself is a clearly marked sample until they do.
+The HP's half (transfer endpoints, the offline queue, delivery over the hub) was built and merged in pull request #11. This is the interface's send and the agent's receiving, built against it, and checked in the real tool against a throwaway copy of the server.
 
 | Check | Result | How it was verified |
 | --- | --- | --- |
-| "Send a file" enabled (D-05) | ✅ (sample send) | On every device card except your own. The dialog opens with that device chosen; files or a folder from this PC, a list with sizes and remove, and a total |
-| Device picker | ✅ | Every paired device except this one, from the live list, with online or offline. Choosing an offline one changes the button to "Queue for …" (D-07) |
-| Send to device from Files | ✅ (sample send) | A file's details panel has Send to device; the dialog shows the file "On the HP" |
-| After sending | ✅ (sample) | A toast ("Sending 2 items to Acer Aspire 5", or "… will go to ROG Ally when it comes online"), and the transfers appear in Transfers with the right devices, waiting for an offline one |
-| Agent saves received files to the Hub Inbox | ✅ the saving · ⏳ delivery | `agent/inbox.js`: `Downloads\Attic Hub Inbox`, Windows-safe names, never overwrites, nothing left behind by a broken or short transfer, can't write outside the inbox. 6 unit tests. Plugging it into the HP's delivery waits for the endpoints |
-| Settings shows the Hub Inbox | ✅ | Folder path and Open folder; checked in the tool by `smoke-test.mjs` |
-| 360px | ✅ | The Send dialog fits (328px) with nothing overflowing |
+| "Send a file" enabled (D-05) | ✅ | On every other client's card (not the HP's, which doesn't receive transfers, and not this PC's). Files or a folder from this PC; a folder goes as its files |
+| Device picker | ✅ | Paired devices except this one and the HP, from the live list. It says whether each one will collect now, or later (offline, or online without the tool running) |
+| Send to device from Files | ✅ | A file on the HP is read back and sent: 300 KB, queued for the Ally |
+| Upload with progress | ✅ | Progress in the dialog, then a toast saying where the file is ("… is on the HP. ROG Ally gets it when it comes online.") |
+| A transfer to an offline device is delivered when it comes online (Phase 2 check, D-07) | ✅ | Both ways. From the tool to the offline Ally: the HP held it, the Ally was told on connect, and the bytes matched exactly. To the tool while it was closed: delivered intact when it started again |
+| A 2 GB file arrives complete in a Hub Inbox (Phase 2 check) | ✅ against a local server | `BIG=1 send-test.mjs`: 2 GB streamed from the stand-in Ally, collected by the tool at about 350 MB/s over this PC's own network; SHA-256 matches |
+| Agent saves received files to the Hub Inbox | ✅ | Collected within about 0.2 s of arriving on the HP. A second file with the same name becomes "name (2)", and no partial files are left |
+| Resuming and cancelling | ✅ | Unit tests against a stand-in HP: a dropped download resumes with `Range`; a cancelled or vanished transfer leaves nothing |
+| Unpairing cancels what's waiting | ✅ | The Ally's queued file was cancelled when it was unpaired |
+| Settings shows the Hub Inbox | ✅ | The folder, Open folder, and the files received this session |
+| Packaged app | ✅ | `send-test.mjs` passes against `dist/win-unpacked/Attic Hub.exe` |
 
-Tests: `node --test "agent/*.test.js"` 22/22, `smoke-test.mjs` (0 console errors, Hub Inbox path), `pairing-test.mjs` 19/19, `live-stats-test.mjs` 17/17, `discovery-test.mjs` 13/13 and `node --test "server/*.test.js"` 109/109.
+Tests: `send-test.mjs` 19/19 (20/20 with `BIG=1`), on the dev build and the packaged app. Also `node --test "agent/*.test.js"` 23/23, `smoke-test.mjs` (0 console errors), `pairing-test.mjs` 19/19, `live-stats-test.mjs` 17/17, `discovery-test.mjs` 13/13 and `node --test "server/*.test.js"` 120/120.
 
-Waiting for the HP: the transfer endpoints (send, hold for an offline device, deliver). Then the Acer swaps `api.sendToDevice` for the real call, uploads the chosen files, connects the agent's delivery to `inbox.receive()`, and runs "A 2 GB file sent from the Acer arrives complete in the ROG Ally's Hub Inbox" and "A transfer to an offline device is delivered when it comes online".
+Found during the run: a device the HP counts as online without an agent (it made a request in the last 2 minutes) can't collect a file yet. The dialog no longer promises "collecting it now" to such a device.
+
+Still to do with the real machines: send from the Acer to the ROG Ally over the home network, once both are paired with the real HP. Not yet built: the Transfers view on real data (2-5).
 
 ## Problems found and fixed during the run
 

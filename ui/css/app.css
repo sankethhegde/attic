@@ -682,6 +682,13 @@ h1, h2, h3 { margin: 0; }
 .send-dn .c { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
 .send-dn .dot { width: 7px; height: 7px; }
 .send .form-error { margin-top: 10px; }
+.send-progress { margin-top: 14px; display: grid; gap: 6px; }
+.inbox-recent { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; text-align: right; min-width: 0; }
+.inbox-recent li { display: flex; flex-direction: column; min-width: 0; }
+.inbox-recent .nm { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-recent .c { font-size: 12px; color: var(--muted); }
+.send-progress-top { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--muted); }
+.send-progress-top > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- pairing (2-2) ---------- */
 .pair-code input { font-family: var(--mono); font-size: 22px; font-weight: 700; letter-spacing: 4px; }
