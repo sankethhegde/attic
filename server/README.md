@@ -9,6 +9,7 @@ The server that runs on the HP laptop. Built one milestone at a time from `docs/
 **Phase 3 on the server:**
 - **3-1:** the HP server runs as a background service that starts with Windows, before anyone signs in, and comes back after a crash. See [Run it as a service](#run-it-as-a-service-phase-3-milestone-3-1-t-03).
 - **3-2:** it sends each client the events it should turn into Windows notifications. See [Notification events](#notification-events-phase-3-milestone-3-2-t-05).
+- **3-5:** it serves the newest desktop-tool installer and its version, so every client can update itself. See [Updates](#updates-phase-3-milestone-3-5-t-10). 3-3 and 3-4 have no server side.
 
 ## Run it
 
@@ -377,6 +378,48 @@ A cancelled transfer makes no notification: the person who cancelled it knows.
 - catching up, paging and filtering to the caller;
 - events surviving a restart;
 - the 7-day limit.
+
+## Updates (Phase 3, milestone 3-5, T-10)
+
+The HP holds the newest desktop-tool installer, and every client asks it whether there's a newer version than its own. This is the HP's half of 3-5; the tool checking, offering and installing is the Acer's half. `updates.js` does it.
+
+**Publishing a release.** The installer must be named as the desktop build names it, `Attic-Hub-Setup-<version>.exe` (from `desktop/`, `npm run dist`). There are two ways:
+- **From the PC that built it**, signed in as the master: `PUT /api/updates/files/Attic-Hub-Setup-0.7.0.exe` with the file as the body and `X-Attic-Upload: 1`. Add `?notes=` for what changed.
+- **On the HP:**
+  ```
+  node server/publish-update.js C:\path\to\Attic-Hub-Setup-0.7.0.exe --notes "What changed"
+  ```
+  The running server picks it up within 30 seconds; no restart is needed.
+
+The HP checks each upload:
+- the file must be a Windows program (it starts `MZ`), up to 1 GB;
+- its version comes from its name;
+- it must be newer than the latest, compared as numbers, so 0.10.0 comes after 0.9.0. `replace=1` (`--replace`) re-publishes the same version.
+
+It records the size, SHA-512 and SHA-256, and keeps the newest 3 releases in `server/data/updates/`, or in `"updatesDir"` from `config.json`, along with `manifest.json`.
+
+**Announcing it.** A new latest release goes at once to every agent and interface as `{"type":"update","latest":{…}}`, and as the notification event `update.available` ("Attic Hub 0.7.0 is available"). Each agent also gets `{"type":"update","latest"}` when it connects (`latest: null` before anything is published).
+
+**Reading it.** Readers are any paired device, by its device token alone (an agent), or any session.
+
+| Route | Who | Does |
+| --- | --- | --- |
+| `GET /api/updates/latest?current=0.6.0` | paired device or session | `{ version, fileName, size, sha512, sha256, releaseDate, notes, url }`, plus `newer` when `current` is given. `404 NO_UPDATE` before the first release |
+| `GET /api/updates/files/<installer>` | paired device or session | The installer, with `Range` for resuming. Only files in the manifest are served |
+| `GET /api/updates/files/latest.yml` | paired device or session | The same release in the format electron-updater's `generic` provider reads: point it at `http://<HP>:8080/api/updates/files` and send `X-Attic-Device` in its request headers. There's no `.blockmap`, so it downloads the whole installer |
+| `PUT /api/updates/files/<installer>` | master | Publish. `?notes=`, `?replace=1` |
+| `GET /api/updates` | master | The kept releases, newest first |
+
+The installers aren't code-signed yet, so Windows SmartScreen may warn when one runs. The hashes check that the file arrived intact from the HP. They don't prove who built it; only the master can publish, which is what stands in for that on the home network.
+
+`updates.test.js` covers:
+- no update before the first release;
+- publishing by upload and by command line, and the announcement;
+- `newer` for an older and the same version;
+- download, resume and the hashes;
+- `latest.yml`;
+- the refusals: not the master, a bad name, not a program, the same or an older version, and path tricks;
+- replacing, keeping 3, and a restart.
 
 ## Rules that carry over
 
