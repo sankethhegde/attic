@@ -16,6 +16,7 @@ const { createSelfStats } = require('./self-stats');
 const { createTransfers, publicTransfer } = require('./transfers');
 const { openDb } = require('./db');
 const { createEvents } = require('./events');
+const { createUpdates, publicRelease } = require('./updates');
 
 const UI_ROOT = path.resolve(__dirname, '..', 'ui');
 // Overridable so the tests can run a server on a throwaway config and data folder.
@@ -264,10 +265,29 @@ function announceProgress(t, p) {
   hub.toViewers(mayWatch(t), { type: 'progress', id: t.id, stage: p.stage, bytesDone: p.bytesDone, size: t.size, speed: p.speed });
 }
 // A device coming online gets everything waiting for it: the offline queue (D-07).
-// It's also told the newest event number, so it can fetch any notifications it missed while away.
+// ---------- updates (Phase 3, 3-5) ----------
+// The newest desktop-tool installer and its version (config "updatesDir", default data/updates). A new
+// one is announced to everyone, as a hub message and as a notification event.
+const updates = createUpdates({ dir: path.resolve(CONFIG.raw.updatesDir || path.join(DATA_DIR, 'updates')), log: m => console.log('  ' + m),
+  onPublished: r => {
+    const msg = { type: 'update', latest: publicRelease(r) };
+    hub.toAgents(null, msg);
+    hub.toViewers(() => true, msg);
+    events.emit('update.available', { title: `Attic Hub ${r.version} is available`, body: 'A newer version of the Attic Hub desktop tool is ready to install from the HP.', toDevices: '*', toAccounts: '*' });
+  } });
+setInterval(() => updates.poll(), +process.env.ATTIC_UPDATES_POLL_MS || 30e3).unref(); // picks up `node server/publish-update.js`
+// Anyone the HP knows may read about updates: a paired device (an agent, by its token) or a session.
+function requireUpdateReader(req) {
+  if (req.device) return;
+  if (!auth.resolve(readCookie(req, COOKIE), deviceIdOf(req))) throw SIGNED_OUT();
+}
+
+// A connecting agent is also told the newest event number, so it can fetch any notifications it missed
+// while away, and the newest installer's version, so it can offer an update.
 hub.setAgentHook((deviceId, send) => {
   send({ type: 'inbox', transfers: transfers.pendingFor(deviceId).map(publicTransfer) });
   send({ type: 'events', last: events.lastSeq() });
+  send({ type: 'update', latest: publicRelease(updates.latest()) });
 });
 setInterval(() => transfers.sweep(), 3600e3).unref();
 transfers.sweep();
@@ -358,7 +378,7 @@ async function inOneStep(changeOwnership, changeAccount) {
 
 async function handleApi(req, res, url, query) {
   const m = req.method;
-  const upload = /^\/api\/(shares|transfers)\/[A-Za-z0-9_-]{1,64}\/file$/.test(url) && m === 'PUT';
+  const upload = (/^\/api\/(shares|transfers)\/[A-Za-z0-9_-]{1,64}\/file$/.test(url) || /^\/api\/updates\/files\/[^/]+$/.test(url)) && m === 'PUT';
   if (m !== 'GET' && m !== 'HEAD') checkWrite(req, upload);
   const body = !upload && (m === 'POST' || m === 'PATCH' || m === 'PUT') ? await readBody(req) : {};
 
@@ -535,6 +555,38 @@ async function handleApi(req, res, url, query) {
     if (!audience.deviceId && !audience.accountId) throw SIGNED_OUT();
     if (!query.has('after')) return sendJSON(res, 200, { events: [], last: events.lastSeq(), more: false });
     return sendJSON(res, 200, events.since(audience, query.get('after'), query.get('limit') || 100));
+  }
+
+  // ---------- updates (3-5) ----------
+  // The newest installer; ?current=<the caller's version> adds whether it's newer. 404 NO_UPDATE if none.
+  if (url === '/api/updates/latest' && m === 'GET') {
+    requireUpdateReader(req);
+    const r = updates.latest();
+    if (!r) throw new AuthError(404, 'NO_UPDATE', 'The HP has no installer to offer yet.');
+    return sendJSON(res, 200, publicRelease(r, query.get('current')));
+  }
+  if (url === '/api/updates' && m === 'GET') { requireMaster(req); return sendJSON(res, 200, updates.list().map(r => publicRelease(r))); }
+  const upd = /^\/api\/updates\/files\/([^/]+)$/.exec(url);
+  if (upd) {
+    let name;
+    try { name = decodeURIComponent(upd[1]); } catch (e) { throw new AuthError(400, 'INVALID', 'Bad file name.'); }
+    // For electron-updater's generic provider, pointed at /api/updates/files.
+    if (name === 'latest.yml' && m === 'GET') {
+      requireUpdateReader(req);
+      const yml = updates.yml();
+      if (!yml) throw new AuthError(404, 'NO_UPDATE', 'The HP has no installer to offer yet.');
+      res.writeHead(200, { 'Content-Type': 'text/yaml; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(yml);
+    }
+    if (m === 'GET' || m === 'HEAD') { requireUpdateReader(req); return sendFile(req, res, await updates.open(name), false); }
+    // Publish (master): the installer as the body, with X-Attic-Upload: 1. ?notes=&replace=1
+    if (m === 'PUT') {
+      const who = requireMaster(req);
+      const declared = Number(req.headers['content-length']);
+      const r = await updates.publish(req, { fileName: name, notes: query.get('notes') || '', replace: query.get('replace') === '1',
+        size: Number.isFinite(declared) ? declared : null, publishedBy: who.session.accountId });
+      return sendJSON(res, 201, publicRelease(r));
+    }
   }
 
   // What is waiting for this device (its agent, or its interface).
