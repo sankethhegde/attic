@@ -62,8 +62,10 @@ const { createAgent, hubUrl } = require(path.join(ROOT, 'agent', 'hub-agent.js')
 const { createCollector } = require(path.join(ROOT, 'agent', 'stats.js'));
 const inbox = require(path.join(ROOT, 'agent', 'inbox.js'));
 const { createReceiver } = require(path.join(ROOT, 'agent', 'receiver.js'));
-// Where received files land (2-4); choosing another is 3-3. ATTIC_INBOX points tests elsewhere.
-const INBOX = process.env.ATTIC_INBOX || inbox.defaultFolder();
+// Where received files land (2-4): the folder chosen in Settings (3-3), else Downloads\Attic Hub Inbox.
+// ATTIC_INBOX points tests elsewhere by default. prefs is loaded once the app is ready.
+const inboxDir = () => (prefs && prefs.inboxDir) || process.env.ATTIC_INBOX || inbox.defaultFolder();
+const openInbox = () => { fs.mkdirSync(inboxDir(), { recursive: true }); return shell.openPath(inboxDir()); };
 let si = null;
 try { si = require('systeminformation'); } catch (e) { /* battery unknown, network guessed by name */ }
 
@@ -107,7 +109,7 @@ function notify(title, body, onClick) {
 const notifier = createNotifier({
   show: notify,
   reveal: p => shell.showItemInFolder(p),
-  openInbox: () => { fs.mkdirSync(INBOX, { recursive: true }); shell.openPath(INBOX); },
+  openInbox,
   enabled: () => !!(prefs && prefs.notify.received)
 });
 
@@ -120,6 +122,7 @@ function applyStartWithWindows() {
 function setPrefs(patch) {
   prefs = prefsStore.save(patch, mode && mode.mode);
   applyStartWithWindows();
+  if (typeof patch.explorerMenu === 'boolean') applyExplorerMenu();
   updateTray();
   return prefs;
 }
@@ -145,13 +148,16 @@ if (SUPERVISOR_ARG) {
   app.quit();
 } else {
   app.setAppUserModelId('com.sankethhegde.attichub'); // so Windows shows notifications as Attic Hub
-  app.on('second-instance', showWindow);
+  // A second launch shows the window; one from File Explorer's "Send to Attic Hub" (3-3) also brings files.
+  app.on('second-instance', (_e, argv) => { showWindow(); queueSend(explorer.sendPaths(argv)); });
   app.whenReady().then(() => {
     saved = connect.store(path.join(app.getPath('userData'), 'server.json'));
     remembered = saved.load();
     mode = modeStore.load();
     prefs = prefsStore.load(mode && mode.mode);
     applyStartWithWindows();
+    applyExplorerMenu();
+    pendingSend.push(...explorer.sendPaths(process.argv)); // started from File Explorer
     createWindow();
     tray = require('./tray.js').createTray({
       iconPath: ICON,
@@ -159,7 +165,7 @@ if (SUPERVISOR_ARG) {
         canStartWithWindows: app.isPackaged, notify: prefs.notify }),
       actions: {
         open: showWindow,
-        openInbox: () => { fs.mkdirSync(INBOX, { recursive: true }); shell.openPath(INBOX); },
+        openInbox,
         serverControls: () => { showWindow(); if (mode && mode.mode === 'server') showServerPage(); },
         toggleStart: () => setPrefs({ startWithWindows: !prefs.startWithWindows }),
         toggleNotify: group => setPrefs({ notify: { [group]: !prefs.notify[group] } }),
@@ -299,7 +305,7 @@ async function startAgent() {
   collect = collect || createCollector({ si });
   agentToken = c.value;
   // Files sent to this PC (2-4) are announced over the same connection and collected into the Hub Inbox.
-  receiver = createReceiver({ server: s, token: c.value, dir: INBOX, onEvent: ev => {
+  receiver = createReceiver({ server: s, token: c.value, dir: inboxDir, onEvent: ev => {
     if (ev.type !== 'received') return;
     received.unshift({ name: path.basename(ev.path), path: ev.path, size: ev.transfer.size, at: new Date().toISOString() });
     received.length = Math.min(received.length, 20);
@@ -390,11 +396,12 @@ ipcMain.on('mode:change', e => { if (trusted(e)) showChooser({ changing: true })
 
 // ---------- the tool's own preferences (3-2) ----------
 const prefsOut = p => ({ startWithWindows: p.startWithWindows, notifyReceived: p.notify.received, notifyTransfers: p.notify.transfers,
-  notifyDevices: p.notify.devices, canStartWithWindows: app.isPackaged, mode: mode && mode.mode });
+  notifyDevices: p.notify.devices, canStartWithWindows: app.isPackaged, mode: mode && mode.mode,
+  explorerMenu: p.explorerMenu, inboxDefault: !p.inboxDir });
 ipcMain.handle('prefs:get', e => trusted(e) && prefs ? prefsOut(prefs) : null);
 ipcMain.handle('prefs:set', (e, patch) => {
   if (!trusted(e) || !patch) return null;
-  return prefsOut(setPrefs({ startWithWindows: patch.startWithWindows,
+  return prefsOut(setPrefs({ startWithWindows: patch.startWithWindows, explorerMenu: patch.explorerMenu,
     notify: { received: patch.notifyReceived, transfers: patch.notifyTransfers, devices: patch.notifyDevices } }));
 });
 if (TEST_HOOKS) {
@@ -404,6 +411,7 @@ if (TEST_HOOKS) {
   ipcMain.handle('test:window', () => win ? { visible: win.isVisible() } : null);
   ipcMain.handle('test:closeWindow', () => { if (win) win.close(); return true; }); // what the window's X does
   ipcMain.handle('test:loginItem', () => app.getLoginItemSettings({ path: process.execPath, args: ['--hidden'] }).openAtLogin);
+  ipcMain.handle('test:explorerMenu', () => explorer.status(process.execPath));
 }
 
 ipcMain.handle('server:state', async e => {
@@ -452,13 +460,95 @@ ipcMain.handle('server:open', async e => {
 ipcMain.on('server:controls', e => { if (trusted(e) && mode && mode.mode === 'server') showServerPage(); });
 
 // The Hub Inbox (2-4): where it is, and opening it in File Explorer (made first if nothing has arrived yet).
-ipcMain.handle('inbox:path', e => trusted(e) ? INBOX : null);
+ipcMain.handle('inbox:path', e => trusted(e) ? inboxDir() : null);
 ipcMain.handle('inbox:recent', e => trusted(e) ? received.map(r => ({ name: r.name, size: r.size, at: r.at })) : []);
 ipcMain.handle('inbox:open', async e => {
   if (!trusted(e)) return 'Not allowed';
-  try { await require('fs').promises.mkdir(INBOX, { recursive: true }); } catch (err) { return err.message; }
-  return shell.openPath(INBOX); // '' when it opened
+  try { return await openInbox(); } catch (err) { return err.message; } // '' when it opened
 });
+// Choosing another Hub Inbox folder (3-3, T-07). Files already received stay where they are; the next
+// file goes to the new folder. `folder` is for the tests; a person picks one in Windows' folder dialog.
+ipcMain.handle('inbox:choose', async (e, folder) => {
+  if (!trusted(e)) return { error: 'Not allowed' };
+  if (!folder) {
+    const r = await dialog.showOpenDialog(win, { title: 'Where should files sent to this PC go?', defaultPath: inboxDir(), properties: ['openDirectory', 'createDirectory'] });
+    if (r.canceled) return { canceled: true };
+    folder = r.filePaths[0];
+  }
+  try { setPrefs({ inboxDir: await inbox.checkFolder(folder) }); return { path: inboxDir() }; }
+  catch (err) { return { error: err.message }; }
+});
+ipcMain.handle('inbox:reset', e => { if (!trusted(e)) return null; setPrefs({ inboxDir: null }); return { path: inboxDir() }; });
+
+// ---------- Send from File Explorer (3-3, T-06) and by path ----------
+// `Attic Hub.exe --send "<path>"` comes from the right-click entry, once per picked item. The paths are
+// gathered for a moment, then the interface is asked to show its Send dialog (or picks them up once
+// it's signed in). The files are sent from here, by path: the page can't read them.
+const explorer = require(path.join(ROOT, 'agent', 'explorer.js'));
+const uploader = require(path.join(ROOT, 'agent', 'uploader.js'));
+let pendingSend = [], sendTimer = 0, sendJob = null;
+const sentPaths = new Map(); // transfer id → path, so Retry can send it again
+function queueSend(paths) {
+  if (!paths.length) return;
+  pendingSend.push(...paths);
+  clearTimeout(sendTimer);
+  sendTimer = setTimeout(() => { showWindow(); if (win && server) win.webContents.send('send:request'); }, 700);
+}
+ipcMain.handle('send:pending', async e => {
+  if (!trusted(e) || !pendingSend.length) return [];
+  const paths = [...new Set(pendingSend)];
+  pendingSend = [];
+  return (await uploader.expand(paths)).map((f, i) => Object.assign(f, { id: 'p' + Date.now().toString(36) + i }));
+});
+// Files on the HP's own PC (Server mode) or the paired HP, sent with the window's own sign-in.
+async function sendBase() {
+  if (!server) throw new Error('Attic Hub isn’t connected to the HP.');
+  const base = connect.urlFor(server);
+  const cookies = await win.webContents.session.cookies.get({ url: base });
+  return { base, cookie: cookies.map(c => `${c.name}=${c.value}`).join('; ') };
+}
+ipcMain.handle('send:upload', async (e, { files, to }) => {
+  if (!trusted(e)) return { error: 'Not allowed' };
+  try {
+    const { base, cookie } = await sendBase();
+    sendJob = uploader.send({ base, cookie, files, to,
+      onProgress: p => { if (win) win.webContents.send('send:progress', p); },
+      onSent: (id, f) => sentPaths.set(id, f.path) });
+    const out = await sendJob.promise;
+    return { transfers: out };
+  } catch (err) { return { error: err.message, code: err.code }; }
+  finally { sendJob = null; }
+});
+ipcMain.on('send:cancel', e => { if (trusted(e) && sendJob) sendJob.cancel(); });
+ipcMain.handle('send:hasPath', (e, id) => trusted(e) && sentPaths.has(id));
+// Retry for a file that was sent by path: the same file again, by its path.
+ipcMain.handle('send:resend', async (e, t) => {
+  if (!trusted(e) || !sentPaths.has(t.id)) return { error: 'Choose the file to send again.' };
+  try {
+    const { base, cookie } = await sendBase();
+    const p = sentPaths.get(t.id);
+    const size = (await fs.promises.stat(p)).size;
+    if (size !== t.size) return { error: `${path.basename(p)} has changed since it was sent. Send it again from File Explorer.` };
+    await new Promise((resolve, reject) => {
+      const req = require('http').request(new URL(`/api/transfers/${encodeURIComponent(t.id)}/file`, base),
+        { method: 'PUT', headers: { Cookie: cookie, 'Content-Type': 'application/octet-stream', 'X-Attic-Upload': '1', 'Content-Length': size } },
+        res => { res.resume(); res.on('end', () => res.statusCode === 200 ? resolve() : reject(new Error(`The HP answered ${res.statusCode}.`))); });
+      req.on('error', reject);
+      fs.createReadStream(p).pipe(req);
+    });
+    return { ok: true };
+  } catch (err) { return { error: err.message }; }
+});
+
+// The right-click entry follows its preference, in the installed app only (a development copy would
+// point Explorer at electron.exe).
+async function applyExplorerMenu() {
+  if (!app.isPackaged || process.platform !== 'win32') return;
+  try {
+    if (prefs.explorerMenu) { if ((await explorer.status(process.execPath)) !== 'ours') await explorer.register(process.execPath); }
+    else if ((await explorer.status(process.execPath)) !== 'none') await explorer.unregister();
+  } catch (e) { /* the menu entry is a convenience; the tool works without it */ }
+}
 
 function createWindow() {
   Menu.setApplicationMenu(null);

@@ -32,7 +32,20 @@ contextBridge.exposeInMainWorld('atticDesktop', {
   inbox: {
     path: () => ipcRenderer.invoke('inbox:path'),
     recent: () => ipcRenderer.invoke('inbox:recent'),
-    open: () => ipcRenderer.invoke('inbox:open')
+    open: () => ipcRenderer.invoke('inbox:open'),
+    // 3-3: choose another folder (Windows' folder dialog), or go back to the default.
+    choose: folder => ipcRenderer.invoke('inbox:choose', folder ? String(folder) : null),
+    reset: () => ipcRenderer.invoke('inbox:reset')
+  },
+  // Sending files picked in File Explorer (3-3): the tool reads them by path, so it sends them too.
+  send: {
+    onRequest: cb => { ipcRenderer.on('send:request', () => cb()); },
+    pending: () => ipcRenderer.invoke('send:pending'),
+    upload: (files, to) => ipcRenderer.invoke('send:upload', JSON.parse(JSON.stringify({ files, to }))),
+    onProgress: cb => { ipcRenderer.removeAllListeners('send:progress'); ipcRenderer.on('send:progress', (_e, p) => cb(p)); },
+    cancel: () => ipcRenderer.send('send:cancel'),
+    hasPath: id => ipcRenderer.invoke('send:hasPath', String(id)),
+    resend: t => ipcRenderer.invoke('send:resend', JSON.parse(JSON.stringify(t)))
   },
   // This PC's role (3-1): the first-launch choice, and changing it later from Settings.
   mode: {
@@ -61,6 +74,7 @@ contextBridge.exposeInMainWorld('atticDesktop', {
     notes: () => ipcRenderer.invoke('test:notes'),
     window: () => ipcRenderer.invoke('test:window'),
     closeWindow: () => ipcRenderer.invoke('test:closeWindow'),
-    loginItem: () => ipcRenderer.invoke('test:loginItem')
+    loginItem: () => ipcRenderer.invoke('test:loginItem'),
+    explorerMenu: () => ipcRenderer.invoke('test:explorerMenu')
   } : undefined
 });

@@ -97,6 +97,16 @@ Tests: `node --test "agent/*.test.js"` (`mode.js`, and `server-control.js` witho
 
 Tests: `node --test "agent/*.test.js"` (`notify.js` and `prefs.js`). Also `desktop/scripts/tray-test.mjs`, the real tool with a stand-in ROG Ally, run with `ATTIC_TEST_HOOKS=1` so the test can read the tray menu and the notifications shown.
 
+## Hub Inbox folder and sending shortcuts (Phase 3, milestone 3-3, T-06, T-07, T-08)
+
+- **The inbox folder** is `prefs.inboxDir` (null: the default in Downloads). `inbox.checkFolder()` accepts only a full path it can create and write to. The receiver reads the folder once per file, so a change applies from the next file.
+- **`explorer.js`** writes "Send to Attic Hub" for files (`*`) and folders (`Directory`) under `HKCU\Software\Classes`, with Windows' `reg.exe` and no Administrator rights. The command is `"<Attic Hub.exe>" --send "%1"`. `desktop/build/installer.nsh` removes it on uninstall. `sendPaths()` takes only full paths after `--send`, because Chromium can reorder a launch's arguments.
+- **`desktop/main.js`** gathers `--send` launches (one per picked item, through the single-instance handoff) for 0.7 s, then asks the interface to show its Send dialog. If nobody is signed in yet, the interface picks them up after sign-in.
+- **`uploader.js`** sends those files from the main process, since the page can't read a path: it expands folders into their files, then does `POST /api/transfers` and `PUT` the file, streamed from disk with the window's own cookies. The tool remembers each transfer's path, so Retry sends the same file again.
+- **Dropping files on the window** is handled in the interface (`ui/js/views/send.js`), which opens dropped folders into their files.
+
+Tests: `node --test "agent/*.test.js"` (`explorer.js`, `checkFolder`, the new preferences). Also `desktop/scripts/shortcuts-test.mjs`, the real tool with real `--send` launches; with the packaged exe it also checks the real registry entry, and always removes it.
+
 ## Still to come
 
-The rest of Phase 3, tool polish: Explorer's "Send to Attic Hub", choosing the Hub Inbox folder, dragging files onto the window, the ROG Ally's low-resource mode, and updates.
+The rest of Phase 3: the ROG Ally's low-resource mode (3-4), and updates (3-5).

@@ -688,6 +688,12 @@ h1, h2, h3 { margin: 0; }
 
 /* ---------- send to a device (2-4) ---------- */
 .send .banner { margin-bottom: 12px; }
+/* dropping files on the window (3-3) */
+.drop-veil { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(3px); pointer-events: none; }
+.drop-card { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 30px 40px; border-radius: 20px; border: 2px dashed var(--accent); background: var(--surface); text-align: center; max-width: calc(100vw - 48px); }
+.drop-card .ic { width: 34px; height: 34px; color: var(--accent); }
+.drop-card b { font-size: 18px; }
+.drop-card span { color: var(--muted); font-size: 14px; }
 .send-h { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); margin: 14px 0 8px; }
 .send-empty { margin: 0 0 8px; font-size: 13.5px; color: var(--muted); }
 .send-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 220px; overflow: auto; }
