@@ -6,6 +6,8 @@ The server that runs on the HP laptop. Built one milestone at a time from `docs/
 
 **Phase 2 on the server:** discovery (2-1) answers clients looking for the HP on the home network, pairing (2-2) lets only devices the master approved use it, the live hub (2-3) carries each device's stats to the master as they change, and transfers (2-4) send a file to another device through the HP, holding it while that device is offline. Transfers report live progress, can be retried, and are kept as history in a database (2-5).
 
+**Phase 3 on the server:** the HP server runs as a background service that starts with Windows, before anyone signs in, and comes back after a crash (3-1). See [Run it as a service](#run-it-as-a-service-phase-3-milestone-3-1-t-03).
+
 ## Run it
 
 ```
@@ -19,6 +21,56 @@ It prints the port, the addresses to open (this PC and the home network), and ea
 - Point shares at folders, never at a drive root: `D:\Shared`, not `D:\`.
 - A share whose path is missing (an unplugged external drive) reports `available: false` with the last time it was seen. Those times live in `server/data/`, also gitignored.
 - For phones on the home Wi-Fi, Windows Firewall needs inbound TCP 8080 allowed on the Private profile only.
+
+## Run it as a service (Phase 3, milestone 3-1, T-03)
+
+So the HP serves files after a reboot with nobody signed in, the server runs as a Windows startup task. It doesn't need a separate service-wrapper program, and it gives the same three things: it starts at boot, needs no sign-in, and comes back after a crash. This is the HP's half of 3-1. The desktop tool's first-launch "Server or Client" screen is the Acer's half, and will run these same commands.
+
+Install it once, from an **Administrator** PowerShell (Start → type PowerShell → right-click "Windows PowerShell" → Run as administrator):
+
+```
+cd C:\Users\HP\Desktop\Claude\attic
+node server/service/service.js install
+```
+
+Stop any server you started by hand first; `install` refuses while one is holding port 8080. It registers the task "Attic Hub Server" and starts it.
+
+| Command | Needs admin | Does |
+| --- | --- | --- |
+| `node server/service/service.js install` | yes | Register the task and start it |
+| `node server/service/service.js uninstall` | yes | Stop it and remove the task. Data and settings stay |
+| `node server/service/service.js start` / `stop` / `restart` | no | Run or stop it now. `stop` asks the supervisor to finish cleanly, then ends the task |
+| `node server/service/service.js status` (`--json`) | no | Is the task installed, is the supervisor running (and how many restarts), is the server answering |
+| `node server/service/service.js logs` (`--lines 50`) | no | The end of the server's log |
+
+**The task** (`service/service.js`):
+- **When it runs:** at startup, before anyone signs in. Windows keeps it from starting twice.
+- **Which account:** your Windows account with `S4U` ("run whether signed in or not", without storing your password). It can reach this PC's drives, and files it writes stay yours. It can't reach network shares, which Attic doesn't use. Not elevated.
+- **Power and time:** it starts and keeps running on battery, and has no time limit.
+- **If it dies:** Windows restarts it every minute, up to 999 times.
+
+**The supervisor** (`service/supervisor.js`) is what the task runs. It runs `server.js` and:
+- **Crashes:** restarts the server after it exits, waiting 1, 2, 5, 10, then 30 seconds between tries. A run that lasted a minute resets the wait.
+- **Hangs:** restarts the server when it stops answering `GET /api/hello`, after three misses 15 seconds apart.
+- **Logs:** writes everything the server prints, with times, to `server/data/logs/attic-YYYY-MM-DD.log`. Lines from stderr are marked `!`. It keeps 14 days.
+- **State:** keeps its current state in `server/data/supervisor.json` for `status`, and refuses to start a second copy.
+- **Orphans:** a server started by the supervisor exits within 2 seconds if the supervisor goes, so stopping the task never leaves a server holding the port.
+
+For the acceptance check ("the HP server runs after a reboot with no one signed in"): install, restart the HP, and don't sign in. From the Acer, `node server/find-server.js` should find it, and `http://192.168.1.12:8080` should open. Then sign in on the HP and run `status`, which should show the supervisor running since boot.
+
+Two Windows settings matter for this:
+- **The Wi-Fi network** must be one saved for all users, which is the default, so the HP connects before anyone signs in. Ethernet always does.
+- **Sleep** stops everything. For an always-on server, set Power Options → "When plugged in, put the computer to sleep" to Never, and choose "Do nothing" for closing the lid while it's plugged in.
+
+`service.test.js` covers it:
+- that the generated task starts at boot, as S4U, on battery, with no time limit, restarted if it dies, and with paths quoted safely;
+- that `status` reads Windows without changing it;
+- the supervisor restarting a crashed server and a hung one;
+- the growing wait for a server that keeps crashing;
+- stopping on request, and the server not outliving a killed supervisor;
+- one supervisor at a time.
+
+Nothing in the tests installs a real task.
 
 ## Path safety (milestone 2)
 
