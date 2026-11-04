@@ -13,6 +13,7 @@ const { createPairing, KINDS: DEVICE_KINDS } = require('./pairing');
 const ws = require('./ws');
 const { createHub } = require('./hub');
 const { createSelfStats } = require('./self-stats');
+const { createTransfers, publicTransfer } = require('./transfers');
 
 const UI_ROOT = path.resolve(__dirname, '..', 'ui');
 // Overridable so the tests can run a server on a throwaway config and data folder.
@@ -227,6 +228,29 @@ const listDevices = (viewerDeviceId, master) => allDevices().map(d => describeDe
 hub.setDescriber((id, who) => { const d = allDevices().find(x => x.id === id); return d ? describeDevice(d, who) : null; });
 
 // The HP measures itself while a master is watching the Devices view.
+// ---------- transfers (Phase 2, 2-4) ----------
+// Files sent to another device wait on the HP (config "transferSpool", default data/transfers) until
+// that device collects them. Every change is pushed: to the receiving agent, and to the viewers who may
+// see the transfer (the master, the sender, anyone on the receiving device).
+const transfers = createTransfers({ dataDir: DATA_DIR, spoolDir: path.resolve(CONFIG.raw.transferSpool || path.join(DATA_DIR, 'transfers')),
+  log: m => console.log('  ' + m), onChange: t => announceTransfer(t) });
+function announceTransfer(t) {
+  const pub = publicTransfer(t);
+  if (t.status === 'queued') hub.toAgent(t.to, { type: 'transfer', transfer: pub });
+  if (t.status === 'cancelled') hub.toAgent(t.to, { type: 'transfer-cancelled', id: t.id });
+  hub.toViewers(v => v.master || v.accountId === t.userId || v.deviceId === t.to, { type: 'transfer', transfer: pub });
+}
+// A device coming online gets everything waiting for it: the offline queue (D-07).
+hub.setAgentHook((deviceId, send) => send({ type: 'inbox', transfers: transfers.pendingFor(deviceId).map(publicTransfer) }));
+setInterval(() => transfers.sweep(), 3600e3).unref();
+transfers.sweep();
+// The receiving end is a device, not an account: its agent calls with the device token alone.
+function requireReceiver(req) {
+  if (!req.device) throw NOT_PAIRED();
+  if (req.device === SERVER_DEVICE) throw new AuthError(400, 'INVALID', 'The HP doesn’t receive transfers. To put a file on the HP, upload it in Files.');
+  return req.device.id;
+}
+
 const selfStats = createSelfStats();
 setInterval(async () => { if (hub.mastersWatching()) hub.reportSelf(SERVER_DEVICE.id, await selfStats()); }, hub.STATS_INTERVAL_MS).unref();
 
@@ -305,7 +329,7 @@ async function inOneStep(changeOwnership, changeAccount) {
 
 async function handleApi(req, res, url, query) {
   const m = req.method;
-  const upload = /^\/api\/shares\/[A-Za-z0-9_-]{1,64}\/file$/.test(url) && m === 'PUT';
+  const upload = /^\/api\/(shares|transfers)\/[A-Za-z0-9_-]{1,64}\/file$/.test(url) && m === 'PUT';
   if (m !== 'GET' && m !== 'HEAD') checkWrite(req, upload);
   const body = !upload && (m === 'POST' || m === 'PATCH' || m === 'PUT') ? await readBody(req) : {};
 
@@ -435,6 +459,7 @@ async function handleApi(req, res, url, query) {
     const d = pairing.unpair(devEdit[1]);
     auth.dropDeviceSessions(d.id);
     hub.deviceRemoved(d.id);
+    transfers.dropDevice(d.id);
     hub.recheck();
     console.log(`  Unpaired: ${d.name} (${d.id})`);
     return sendJSON(res, 200, { ok: true, device: { id: d.id, name: d.name } });
@@ -449,6 +474,39 @@ async function handleApi(req, res, url, query) {
     requireMaster(req);
     if (!pairing.cancelCode(codeEdit[1])) throw new AuthError(404, 'NOT_FOUND', 'That code has already been used or has expired.');
     return sendJSON(res, 200, { ok: true });
+  }
+
+  // ---------- transfers (Phase 2, 2-4) ----------
+  if (url === '/api/transfers') {
+    const who = requireSession(req);
+    const master = who.session.type === 'master';
+    if (m === 'GET') return sendJSON(res, 200, transfers.list({ master, userId: who.session.accountId, deviceId: deviceIdOf(req) }).map(publicTransfer));
+    // Step 1: say what is coming and to which device. Step 2 is the PUT below.
+    if (m === 'POST') {
+      const t = await transfers.create(body, { userId: who.session.accountId, from: deviceIdOf(req),
+        isDevice: id => id !== SERVER_DEVICE.id && pairing.list().some(d => d.id === id) });
+      return sendJSON(res, 201, publicTransfer(t));
+    }
+  }
+  // What is waiting for this device (its agent, or its interface).
+  if (url === '/api/inbox' && m === 'GET') return sendJSON(res, 200, transfers.pendingFor(requireReceiver(req)).map(publicTransfer));
+  const tr = /^\/api\/transfers\/([A-Za-z0-9_-]{1,64})(\/file|\/received|\/failed)?$/.exec(url);
+  if (tr) {
+    const [, id, sub] = tr;
+    // The sender streams the file to the HP: exactly the size it declared, with X-Attic-Upload: 1.
+    if (sub === '/file' && m === 'PUT') {
+      const who = requireSession(req);
+      return sendJSON(res, 200, publicTransfer(await transfers.receiveUpload(id, req, { userId: who.session.accountId, from: deviceIdOf(req) })));
+    }
+    // The receiving device downloads it (resumable by range), then confirms or reports a failure.
+    if (sub === '/file' && (m === 'GET' || m === 'HEAD')) return sendFile(req, res, await transfers.openForDelivery(id, requireReceiver(req)), false);
+    if (sub === '/received' && m === 'POST') return sendJSON(res, 200, publicTransfer(transfers.received(id, requireReceiver(req))));
+    if (sub === '/failed' && m === 'POST') return sendJSON(res, 200, publicTransfer(transfers.failed(id, requireReceiver(req), body.error)));
+    // Cancel: the sender or the master.
+    if (!sub && m === 'DELETE') {
+      const who = requireSession(req);
+      return sendJSON(res, 200, publicTransfer(transfers.cancel(id, { userId: who.session.accountId, master: who.session.type === 'master' })));
+    }
   }
 
   if (url === '/api/accounts') {
@@ -568,7 +626,7 @@ server.on('upgrade', (req, socket) => {
   const conn = ws.accept(req, socket);
   if (!conn) return ws.refuse(socket, 400, { code: 'INVALID', message: 'Expected a WebSocket handshake.' });
   const master = who.session.type === 'master';
-  hub.addViewer(conn, { deviceId, master, devices: listDevices(deviceId, master),
+  hub.addViewer(conn, { deviceId, accountId: who.session.accountId, master, devices: listDevices(deviceId, master),
     check: () => stillPaired() && !!auth.resolve(sessionToken, deviceId) });
 });
 const NOT_PAIRED_BODY = { code: 'NOT_PAIRED', message: 'This device isn’t paired with the HP yet. Ask for a pairing code on the HP.' };

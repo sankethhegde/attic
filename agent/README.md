@@ -40,6 +40,10 @@ Tests: `node --test "agent/*.test.js"` (the agent's logic and the collector, off
 
 ## Still to come
 
-- **2-4 Hub Inbox:** receiving files sent from other devices.
+- **2-4 Hub Inbox:** receiving files sent from other devices. **The HP's side is ready.**
+  - The agent watches its hub connection for `{"type":"inbox","transfers":[…]}`, which comes on every connect (the offline queue), and for `{"type":"transfer"}`, which comes the moment something new arrives for this device.
+  - For each one it downloads `GET /api/transfers/:id/file` into the Hub Inbox (a `.part` file, resuming with `Range`), then renames it and confirms with `POST /api/transfers/:id/received`. If it can't save the file, it reports `POST /api/transfers/:id/failed { error }` instead.
+  - On `{"type":"transfer-cancelled","id"}` it drops that download.
+  - Sending is `POST /api/transfers { to, fileName, size }`, then `PUT /api/transfers/:id/file`. The details are in [server/README.md](../server/README.md#send-to-device-and-the-offline-queue-phase-2-milestone-2-4-d-05-and-d-07).
 
 The Transfers view in `ui/` shows sample data from `ui/js/mockgen.js` until then.
