@@ -57,6 +57,7 @@ function createHub(dataDir, { log = () => {} } = {}) {
 
   const conns = new Set(); // { conn, role, deviceId, master, check, lastReport, recent }
   let describe = () => null; // (deviceId, { master, viewerDeviceId }) -> the device as the Devices view shows it
+  let onAgent = () => {};    // (deviceId, send) when an agent connects: 2-4 sends what's waiting for it
 
   const agentOnline = id => [...conns].some(c => c.role === 'agent' && c.deviceId === id);
   const anyOnline = id => [...conns].some(c => c.deviceId === id);
@@ -118,17 +119,31 @@ function createHub(dataDir, { log = () => {} } = {}) {
   return {
     STATS_INTERVAL_MS,
     setDescriber(fn) { describe = fn; },
+    setAgentHook(fn) { onAgent = fn; },
 
     addAgent(conn, deviceId, check) {
       // One agent per device: a new one (the tool restarted) replaces the old.
       for (const c of [...conns]) if (c.role === 'agent' && c.deviceId === deviceId) c.conn.close(4000, 'Replaced by a newer connection');
       add(conn, { role: 'agent', deviceId, master: false, check });
       conn.send({ type: 'hello', role: 'agent', deviceId, interval: STATS_INTERVAL_MS });
+      onAgent(deviceId, msg => conn.send(msg));
     },
     // The list first, so every later message is a change to it.
-    addViewer(conn, { deviceId, master, check, devices }) {
+    addViewer(conn, { deviceId, accountId, master, check, devices }) {
       conn.send({ type: 'devices', devices });
-      add(conn, { role: 'viewer', deviceId, master, check });
+      add(conn, { role: 'viewer', deviceId, accountId, master, check });
+    },
+
+    // ---------- other messages (2-4 transfers) ----------
+    // To a device's agent. Returns whether one was connected to hear it.
+    toAgent(deviceId, msg) {
+      const list = [...conns].filter(c => c.role === 'agent' && c.deviceId === deviceId);
+      for (const c of list) c.conn.send(msg);
+      return list.length > 0;
+    },
+    // To the viewers `who({ master, accountId, deviceId })` picks.
+    toViewers(who, msg) {
+      for (const v of viewers()) if (who({ master: v.master, accountId: v.accountId, deviceId: v.deviceId })) v.conn.send(msg);
     },
 
     // The HP's own stats come from the server itself, not from an agent.
