@@ -27,7 +27,23 @@ const STEPS = [
    CREATE INDEX transfers_started ON transfers(started_at DESC);
    CREATE INDEX transfers_user ON transfers(user_id, started_at DESC);
    CREATE INDEX transfers_to ON transfers(to_id, status);
-   CREATE INDEX transfers_status ON transfers(status);`
+   CREATE INDEX transfers_status ON transfers(status);`,
+  // 2: events that clients turn into Windows notifications (3-2). `seq` orders them, so a client that
+  // was away asks for what came after the last one it saw. to_devices / to_accounts: a JSON list, or
+  // '*' for everyone (then not_device, the device the event is about, is left out).
+  `CREATE TABLE events (
+     seq INTEGER PRIMARY KEY AUTOINCREMENT,
+     at TEXT NOT NULL,
+     kind TEXT NOT NULL,
+     title TEXT NOT NULL,
+     body TEXT NOT NULL,
+     device_id TEXT,
+     transfer_id TEXT,
+     to_devices TEXT NOT NULL,
+     to_accounts TEXT NOT NULL,
+     not_device TEXT
+   );
+   CREATE INDEX events_at ON events(at);`
 ];
 
 function openDb(dataDir) {
