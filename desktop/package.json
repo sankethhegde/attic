@@ -1,7 +1,7 @@
 {
   "name": "attic-hub",
   "productName": "Attic Hub",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Attic Hub desktop tool: home file server interface and device hub.",
   "author": "Sanketh Hegde",
   "private": true,
@@ -26,6 +26,8 @@
     "files": [
       "main.js",
       "preload.js",
+      "tray.js",
+      "build/icon.png",
       "package.json",
       { "from": "../agent", "to": "agent", "filter": ["*.js", "!*.test.js"] },
       { "from": "../server", "to": "server", "filter": ["discovery.js"] }

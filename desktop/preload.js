@@ -1,6 +1,6 @@
 // The bridge between the window and the desktop tool. It tells the interface it runs inside the tool,
 // and (Phase 2, 2-1) lets the start screen drive the search for the HP and Settings show or change it.
-// Phase 3, 3-1: the server-or-client choice, and Server mode's controls.
+// Phase 3, 3-1: the server-or-client choice, and Server mode's controls. 3-2: the tool's preferences.
 const { contextBridge, ipcRenderer } = require('electron');
 
 const arg = name => {
@@ -48,5 +48,19 @@ contextBridge.exposeInMainWorld('atticDesktop', {
     action: name => ipcRenderer.invoke('server:action', String(name)),
     open: () => ipcRenderer.invoke('server:open'),
     controls: () => ipcRenderer.send('server:controls')
-  }
+  },
+  // This PC's own preferences (3-2): start with Windows, and notifications for received files.
+  prefs: {
+    get: () => ipcRenderer.invoke('prefs:get'),
+    set: patch => ipcRenderer.invoke('prefs:set', JSON.parse(JSON.stringify(patch || {})))
+  },
+  // The end-to-end tests only (ATTIC_TEST_HOOKS=1): the tray menu and the notifications shown.
+  test: arg('test') ? {
+    tray: () => ipcRenderer.invoke('test:tray'),
+    trayClick: label => ipcRenderer.invoke('test:trayClick', String(label)),
+    notes: () => ipcRenderer.invoke('test:notes'),
+    window: () => ipcRenderer.invoke('test:window'),
+    closeWindow: () => ipcRenderer.invoke('test:closeWindow'),
+    loginItem: () => ipcRenderer.invoke('test:loginItem')
+  } : undefined
 });

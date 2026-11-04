@@ -10,8 +10,12 @@
 // set up a new server or use an existing server folder, then install it as a Windows startup task
 // (agent/server-control.js, over the HP's server/service/). The installed task runs this same program
 // with the supervisor's path as its argument; then it runs the supervisor without any window.
-// Tray, notifications and Explorer integration arrive in later milestones.
-const { app, BrowserWindow, Menu, shell, ipcMain, dialog } = require('electron');
+// Milestone 3-2 (T-04, T-05): the tool lives in the system tray (desktop/tray.js). Closing the window
+// hides it; a client starts with Windows, hidden, unless that's turned off; a file received into the Hub
+// Inbox shows a Windows notification, and so do the HP's events for transfers this PC sent and devices
+// going and coming (agent/notify.js). Preferences are per PC (agent/prefs.js).
+// Explorer integration arrives in 3-3.
+const { app, BrowserWindow, Menu, shell, ipcMain, dialog, Notification } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -82,26 +86,96 @@ const received = [];       // the latest files received this session, newest fir
 let mode = null;            // { mode: 'client' | 'server', server?: { dir, config, data } } (mode.json)
 let control = null;         // Server mode's controls (agent/server-control.js), for mode.server
 
+// ---------- tray, start-up and notifications (3-2) ----------
+const prefsStore = require(path.join(ROOT, 'agent', 'prefs.js')).store(path.join(app.getPath('userData'), 'prefs.json'));
+const { createNotifier, createEventFeed } = require(path.join(ROOT, 'agent', 'notify.js'));
+const ICON = path.join(__dirname, 'build', 'icon.png');
+const STARTED_HIDDEN = process.argv.includes('--hidden'); // started with Windows: straight to the tray
+const TEST_HOOKS = process.env.ATTIC_TEST_HOOKS === '1';  // the end-to-end tests read the tray and notifications
+let prefs = null;
+let tray = null;
+let quitting = false;
+const shownNotes = [];      // what was shown, for the tests (TEST_HOOKS only)
+
+function notify(title, body, onClick) {
+  if (TEST_HOOKS) shownNotes.push({ title, body, at: Date.now() });
+  if (!Notification.isSupported()) return;
+  const n = new Notification({ title, body, icon: ICON, silent: false });
+  if (onClick) n.on('click', onClick);
+  n.show();
+}
+const notifier = createNotifier({
+  show: notify,
+  reveal: p => shell.showItemInFolder(p),
+  openInbox: () => { fs.mkdirSync(INBOX, { recursive: true }); shell.openPath(INBOX); },
+  enabled: () => !!(prefs && prefs.notify.received)
+});
+
+// Windows starts the installed tool at sign-in, hidden in the tray. A development copy only keeps the
+// preference: registering electron.exe to start with Windows would be wrong.
+function applyStartWithWindows() {
+  if (!app.isPackaged || process.platform !== 'win32') return;
+  app.setLoginItemSettings({ openAtLogin: !!prefs.startWithWindows, path: process.execPath, args: ['--hidden'] });
+}
+function setPrefs(patch) {
+  prefs = prefsStore.save(patch, mode && mode.mode);
+  applyStartWithWindows();
+  updateTray();
+  return prefs;
+}
+function showWindow() {
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+function trayStatus() {
+  if (!mode) return 'Not set up yet';
+  if (mode.mode === 'server') return control && control.lastUp != null ? (control.lastUp ? 'Server running' : 'Server stopped') : 'Server mode';
+  if (server) return `Connected to ${server.name}`;
+  return searching ? 'Looking for the server…' : 'Not connected';
+}
+function updateTray() { if (tray) tray.update(); }
+function quitApp() { quitting = true; app.quit(); }
+
 // One window only: a second launch focuses the first. The startup task's run above is not a window.
 if (SUPERVISOR_ARG) {
   // nothing else to do: the supervisor runs until it's asked to stop
 } else if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (!win) return;
-    if (win.isMinimized()) win.restore();
-    win.focus();
-  });
+  app.setAppUserModelId('com.sankethhegde.attichub'); // so Windows shows notifications as Attic Hub
+  app.on('second-instance', showWindow);
   app.whenReady().then(() => {
     saved = connect.store(path.join(app.getPath('userData'), 'server.json'));
     remembered = saved.load();
     mode = modeStore.load();
+    prefs = prefsStore.load(mode && mode.mode);
+    applyStartWithWindows();
     createWindow();
+    tray = require('./tray.js').createTray({
+      iconPath: ICON,
+      getState: () => ({ status: trayStatus(), mode: mode && mode.mode, startWithWindows: prefs.startWithWindows,
+        canStartWithWindows: app.isPackaged, notify: prefs.notify }),
+      actions: {
+        open: showWindow,
+        openInbox: () => { fs.mkdirSync(INBOX, { recursive: true }); shell.openPath(INBOX); },
+        serverControls: () => { showWindow(); if (mode && mode.mode === 'server') showServerPage(); },
+        toggleStart: () => setPrefs({ startWithWindows: !prefs.startWithWindows }),
+        toggleNotify: group => setPrefs({ notify: { [group]: !prefs.notify[group] } }),
+        quit: quitApp
+      }
+    });
+    // The server's state, for the tray, without asking Windows every time: just whether it answers.
+    setInterval(async () => {
+      if (!mode || mode.mode !== 'server' || !getControl()) return;
+      control.lastUp = !!(await require(path.join(ROOT, 'agent', 'server-control.js')).hello(+new URL(control.url()).port, 1500));
+      updateTray();
+    }, 5000).unref();
     start();
   });
   // "Start now" runs the server as a child of the tool; it stops with the tool.
-  app.on('before-quit', () => { if (control) control.stopChild(); });
+  app.on('before-quit', () => { quitting = true; if (control) control.stopChild(); });
 }
 
 // What the window shows first: the choice (first launch), the search for the HP, or the server's screen.
@@ -164,6 +238,7 @@ const trusted = e => {
 function sendState(s) {
   lastState = s;
   if (onStartScreen()) win.webContents.send('hub:state', s);
+  updateTray();
 }
 
 function showStartScreen() {
@@ -225,11 +300,27 @@ async function startAgent() {
   agentToken = c.value;
   // Files sent to this PC (2-4) are announced over the same connection and collected into the Hub Inbox.
   receiver = createReceiver({ server: s, token: c.value, dir: INBOX, onEvent: ev => {
-    if (ev.type === 'received') received.unshift({ name: path.basename(ev.path), path: ev.path, size: ev.transfer.size, at: new Date().toISOString() });
+    if (ev.type !== 'received') return;
+    received.unshift({ name: path.basename(ev.path), path: ev.path, size: ev.transfer.size, at: new Date().toISOString() });
     received.length = Math.min(received.length, 20);
+    notifier.received({ path: ev.path, size: ev.transfer.size, fromName: ev.transfer.fromName }); // 3-2
   } });
+  // The HP's notification events (3-2): transfers this PC sent, and devices going and coming.
+  const token = c.value;
+  const feed = createEventFeed({
+    fetchEvents: async after => {
+      const r = await fetch(`${connect.urlFor(s)}api/events?after=${after}`, { headers: { 'X-Attic-Device': token } });
+      if (!r.ok) throw new Error('events ' + r.status);
+      return r.json();
+    },
+    getLast: () => (prefs.seen[s.serverId] == null ? null : prefs.seen[s.serverId]),
+    setLast: seq => { prefs = prefsStore.save({ seen: { [s.serverId]: seq } }, mode && mode.mode); },
+    show: (title, body) => notify(title, body, showWindow),
+    enabled: group => !!prefs.notify[group]
+  });
   agent = createAgent({ url: hubUrl(s), token: c.value, collect, onState: st => { agentState = st; }, onMessage: msg => {
-    if (msg.type === 'inbox') receiver.add(msg.transfers);
+    if (msg.type === 'event' || msg.type === 'events') feed.handle(msg);
+    else if (msg.type === 'inbox') receiver.add(msg.transfers);
     else if (msg.type === 'transfer' && msg.transfer) receiver.add([msg.transfer]);
     else if (msg.type === 'transfer-cancelled') receiver.cancel(msg.id);
   } });
@@ -290,9 +381,30 @@ ipcMain.on('mode:choose', (e, m) => {
   const was = mode;
   // Back to Server mode keeps its folder; anything else starts that mode fresh.
   mode = modeStore.save(m === 'server' && was && was.server ? { mode: 'server', server: was.server } : { mode: m });
+  // The first choice sets start-with-Windows to suit the role (a client starts with Windows; the server's
+  // service already does). A later change of role keeps what was chosen.
+  if (!was) setPrefs({ startWithWindows: prefsStore.load(m).startWithWindows && m !== 'server' });
   start();
 });
 ipcMain.on('mode:change', e => { if (trusted(e)) showChooser({ changing: true }); });
+
+// ---------- the tool's own preferences (3-2) ----------
+const prefsOut = p => ({ startWithWindows: p.startWithWindows, notifyReceived: p.notify.received, notifyTransfers: p.notify.transfers,
+  notifyDevices: p.notify.devices, canStartWithWindows: app.isPackaged, mode: mode && mode.mode });
+ipcMain.handle('prefs:get', e => trusted(e) && prefs ? prefsOut(prefs) : null);
+ipcMain.handle('prefs:set', (e, patch) => {
+  if (!trusted(e) || !patch) return null;
+  return prefsOut(setPrefs({ startWithWindows: patch.startWithWindows,
+    notify: { received: patch.notifyReceived, transfers: patch.notifyTransfers, devices: patch.notifyDevices } }));
+});
+if (TEST_HOOKS) {
+  ipcMain.handle('test:tray', () => tray ? tray.items() : null);
+  ipcMain.handle('test:trayClick', (e, label) => tray ? tray.click(String(label)) : false);
+  ipcMain.handle('test:notes', () => shownNotes.slice());
+  ipcMain.handle('test:window', () => win ? { visible: win.isVisible() } : null);
+  ipcMain.handle('test:closeWindow', () => { if (win) win.close(); return true; }); // what the window's X does
+  ipcMain.handle('test:loginItem', () => app.getLoginItemSettings({ path: process.execPath, args: ['--hidden'] }).openAtLogin);
+}
 
 ipcMain.handle('server:state', async e => {
   if (!trusted(e)) return null;
@@ -361,7 +473,8 @@ function createWindow() {
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      additionalArguments: ['--attic-version=' + app.getVersion(), '--attic-host=' + encodeURIComponent(HOSTNAME), '--attic-os=' + encodeURIComponent(OS_NAME)],
+      additionalArguments: ['--attic-version=' + app.getVersion(), '--attic-host=' + encodeURIComponent(HOSTNAME), '--attic-os=' + encodeURIComponent(OS_NAME)]
+        .concat(TEST_HOOKS ? ['--attic-test=1'] : []),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -369,7 +482,22 @@ function createWindow() {
     }
   });
 
-  win.once('ready-to-show', () => win.show());
+  // Started with Windows: stay in the tray until opened.
+  win.once('ready-to-show', () => { if (!STARTED_HIDDEN) win.show(); });
+
+  // Closing the window keeps Attic Hub running in the tray (3-2): the agent keeps reporting and collecting
+  // files. The first time, a notification says where it went. Quit is in the tray's menu.
+  win.on('close', e => {
+    if (quitting || !tray) return;
+    e.preventDefault();
+    win.hide();
+    if (!prefs.trayHintShown) {
+      setPrefs({ trayHintShown: true });
+      notify('Attic Hub is still running', mode && mode.mode === 'server'
+        ? 'It’s in the system tray. The server keeps running either way.'
+        : 'It’s in the system tray, so files sent to this PC still arrive. Quit from the tray icon’s menu.', showWindow);
+    }
+  });
 
   // The HP's device cookie (2-2) is this PC's pairing. Write it to disk as soon as it arrives or changes,
   // so a crash or power cut straight after pairing doesn't lose it.
