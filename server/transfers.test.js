@@ -7,6 +7,7 @@ const assert = require('node:assert');
 const fs = require('fs'), os = require('os'), path = require('path');
 const { startServer, stopServer, client, wsOpen, shaOfPattern, sleep } = require('./test-util');
 const { createTransfers, KEEP_MS } = require('./transfers');
+const { openDb } = require('./db');
 
 const PORT = 25000 + Math.floor(Math.random() * 1000);
 const MASTER = { displayName: 'Sanketh', username: 'sanketh', password: 'master-pass-1' };
@@ -223,13 +224,18 @@ test('unpairing a device cancels what was waiting for it', async () => {
   assert.match(t.error, /unpaired/);
   await sleep(100);
   assert.ok(!spool().some(f => f.startsWith(id)));
+  // Pair the Ally again (a new identity) for the tests after this one.
+  allyId = await pair(ally, 'ASUS ROG Ally', 'handheld');
+  allyToken = decodeURIComponent(ally.jar.attic_device);
+  asAlly['X-Attic-Device'] = allyToken;
 });
 
 // ---------- housekeeping (the module on its own) ----------
 test('a file nobody collects within 14 days is deleted, and a restart fails an upload cut off by it', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'attic-tr-unit-'));
+  const db = openDb(dir);
   try {
-    const opts = { dataDir: dir, spoolDir: path.join(dir, 'spool') };
+    const opts = { db, dataDir: dir, spoolDir: path.join(dir, 'spool') };
     const tr = createTransfers(opts);
     const isDevice = () => true;
     const a = await tr.create({ fileName: 'old.zip', size: 3, to: 'dev_b' }, { userId: 'u', from: 'dev_a', isDevice });
@@ -245,5 +251,136 @@ test('a file nobody collects within 14 days is deleted, and a restart fails an u
     const again = createTransfers(opts);
     assert.strictEqual(again.get(b.id).status, 'failed');
     assert.match(again.get(b.id).error, /restarted/);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+});
+
+// ---------- 2-5: progress, retry, history ----------
+test('a moving transfer reports its bytes and speed about twice a second, both legs (D-06)', async () => {
+  const v = await wsOpen(PORT, '127.0.0.1', { cookie: hp.cookieHeader() });
+  await v.next('devices');
+  // A slow sender: 6 MB over about 3 s.
+  const size = 6 << 20;
+  const t = (await acer.call('POST', '/api/transfers', { to: allyId, fileName: 'slow.bin', size })).json;
+  let sent = 0;
+  const up = acer.upload(`/api/transfers/${t.id}/file`, size, { gen: (o, n) => { sent += n; return Buffer.alloc(n, 1); }, chunkDelay: 400 });
+  const seen = [];
+  const watch = (async () => { for (;;) { const m = await v.next(m => m.type === 'progress' && m.id === t.id, 6000).catch(() => null); if (!m) return; seen.push(m); if (m.stage === 'deliver' && m.bytesDone === size) return; } })();
+  assert.strictEqual((await up).status, 200);
+  const mid = (await hp.call('GET', '/api/transfers/' + t.id)).json;
+  assert.strictEqual(mid.status, 'queued');
+  await collect(t.id);
+  await watch;
+  const ups = seen.filter(m => m.stage === 'upload'), dels = seen.filter(m => m.stage === 'deliver');
+  assert.ok(ups.length >= 1 && dels.length >= 1, `${ups.length} upload and ${dels.length} delivery events`);
+  for (const m of seen) { assert.strictEqual(m.size, size); assert.ok(m.bytesDone > 0 && m.bytesDone <= size); }
+  assert.strictEqual(dels[dels.length - 1].bytesDone, size, 'the last delivery event is the whole file');
+  assert.ok(seen.some(m => m.speed > 0), 'a speed once there is something to measure');
+  v.close();
+});
+
+test('the list shows live bytes while a transfer moves', async () => {
+  const size = 64 << 20;
+  const t = (await acer.call('POST', '/api/transfers', { to: allyId, fileName: 'watch.bin', size })).json;
+  let release;
+  const gate = new Promise(r => { release = r; });
+  // Send 16 MB, then hold the rest until the test has looked.
+  const up = acer.upload(`/api/transfers/${t.id}/file`, size, { gen: (o, n) => Buffer.alloc(n, 2), pauseAt: 16 << 20, gate });
+  for (let i = 0; i < 40; i++) {
+    const cur = (await hp.call('GET', '/api/transfers/' + t.id)).json;
+    if (cur.bytesDone >= 8 << 20) { assert.strictEqual(cur.status, 'active'); assert.strictEqual(cur.stage, 'upload'); break; }
+    if (i === 39) assert.fail('no live bytes in the list: ' + cur.bytesDone);
+    await sleep(100);
+  }
+  release();
+  assert.strictEqual((await up).status, 200);
+  await collect(t.id);
+});
+
+test('Retry puts a failed delivery back in the queue, and asks for the file again when the HP no longer has it', async () => {
+  // A failed delivery: the HP still has the file, so it's queued again and the agent is told.
+  const a = await allyAgent(); await a.next('hello'); await a.next('inbox');
+  const { id, up } = await send(4096, { fileName: 'retry-me.bin' });
+  await a.next(m => m.type === 'transfer' && m.transfer.id === id);
+  await ally.call('POST', `/api/transfers/${id}/failed`, { error: 'Disk full' }, asAlly);
+  assert.strictEqual((await guest.call('POST', `/api/transfers/${id}/retry`)).status, 404, 'not someone else');
+  const r = (await acer.call('POST', `/api/transfers/${id}/retry`)).json;
+  assert.strictEqual(r.status, 'queued');
+  assert.strictEqual(r.attempts, 2);
+  assert.strictEqual(r.error, null);
+  assert.strictEqual((await a.next(m => m.type === 'transfer' && m.transfer.id === id)).transfer.status, 'queued');
+  const { d } = await collect(id);
+  assert.strictEqual(d.sha, up.sha);
+  assert.strictEqual((await acer.call('POST', `/api/transfers/${id}/retry`)).json.code, 'INVALID', 'not a finished one');
+  // A cancelled one: the HP deleted its copy, so the sender uploads again.
+  const c = await send(2048, { fileName: 'again.bin' });
+  await acer.call('DELETE', '/api/transfers/' + c.id);
+  const r2 = (await hp.call('POST', `/api/transfers/${c.id}/retry`)).json;
+  assert.strictEqual(r2.status, 'active');
+  assert.strictEqual(r2.stage, 'upload');
+  const up2 = await acer.upload(`/api/transfers/${c.id}/file`, 2048);
+  assert.strictEqual(up2.json.status, 'queued');
+  assert.strictEqual(up2.json.attempts, 2);
+  await collect(c.id);
+  a.close();
+});
+
+test('history pages through finished transfers with sender, receiver, size and times (D-08)', async () => {
+  const first = (await hp.call('GET', '/api/transfers/history?limit=3')).json;
+  assert.strictEqual(first.items.length, 3);
+  assert.ok(first.next);
+  for (const t of first.items) {
+    assert.ok(['done', 'failed', 'cancelled'].includes(t.status));
+    for (const k of ['fileName', 'size', 'from', 'to', 'userId', 'startedAt', 'finishedAt']) assert.ok(t[k] !== undefined && t[k] !== null, k);
+  }
+  const done = first.items.find(t => t.status === 'done' && t.to === allyId);
+  if (done) { assert.strictEqual(done.fromName, 'Acer Aspire 5'); assert.strictEqual(done.toName, 'ASUS ROG Ally'); assert.strictEqual(done.userName, 'Sanketh'); }
+  // Every page follows on from the last, with no repeats.
+  const seen = new Set(first.items.map(t => t.id));
+  let next = first.next, pages = 1;
+  while (next) {
+    const p = (await hp.call('GET', `/api/transfers/history?limit=3&before=${encodeURIComponent(next)}`)).json;
+    for (const t of p.items) { assert.ok(!seen.has(t.id), 'repeat ' + t.id); seen.add(t.id); }
+    next = p.next; pages++;
+  }
+  assert.ok(pages >= 2);
+  const all = (await hp.call('GET', '/api/transfers/history?limit=200')).json.items;
+  assert.strictEqual(all.length, seen.size);
+  assert.ok(all.every((t, i) => i === 0 || all[i - 1].startedAt >= t.startedAt), 'newest first');
+  // Filters.
+  assert.ok((await hp.call('GET', '/api/transfers/history?status=done')).json.items.every(t => t.status === 'done'));
+  assert.deepStrictEqual((await hp.call('GET', '/api/transfers/history?q=Coorg')).json.items.map(t => t.fileName), ['Trip to Coorg.zip']);
+  assert.deepStrictEqual((await hp.call('GET', '/api/transfers/history?q=' + encodeURIComponent('%'))).json.items, [], '% is a letter, not a wildcard');
+  assert.ok((await hp.call('GET', `/api/transfers/history?device=${allyId}`)).json.items.every(t => t.from === allyId || t.to === allyId));
+  // Another account: only its own.
+  const g = (await guest.call('GET', '/api/transfers/history?limit=200')).json.items;
+  assert.ok(g.length >= 1 && g.every(t => t.userName === 'Guest' || t.to === acerId));
+  // Unknown or someone else's single transfer: not found.
+  assert.strictEqual((await guest.call('GET', '/api/transfers/' + first.items.find(t => t.userName !== 'Guest').id)).status, 404);
+});
+
+test('the names stay in history after a device is unpaired, and history survives a restart', async () => {
+  const before = (await hp.call('GET', '/api/transfers/history?q=Coorg')).json.items[0];
+  await stopServer(server);
+  await start();
+  await hp.call('POST', '/api/session', Object.assign({ mode: 'master' }, MASTER));
+  const after = (await hp.call('GET', '/api/transfers/history?q=Coorg')).json.items[0];
+  assert.deepStrictEqual(after, before);
+  assert.strictEqual(after.toName, 'ASUS ROG Ally');
+});
+
+test('2-4\'s transfers.json is brought into the database once', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'attic-tr-mig-'));
+  const db = openDb(dir);
+  try {
+    const old = { id: 'tr_old1', fileName: 'Old.zip', size: 10, from: 'dev_a', to: 'dev_b', userId: 'u', status: 'done', stage: null, bytesDone: 10,
+      speed: 5, startedAt: '2026-11-03T10:00:00.000Z', uploadedAt: '2026-11-03T10:00:01.000Z', finishedAt: '2026-11-03T10:00:03.000Z', error: null };
+    fs.writeFileSync(path.join(dir, 'transfers.json'), JSON.stringify([old]));
+    const tr = createTransfers({ db, dataDir: dir, spoolDir: path.join(dir, 'spool') });
+    const got = tr.get('tr_old1');
+    assert.strictEqual(got.fileName, 'Old.zip');
+    assert.strictEqual(got.attempts, 1);
+    assert.ok(!fs.existsSync(path.join(dir, 'transfers.json')) && fs.existsSync(path.join(dir, 'transfers.json.imported')));
+    createTransfers({ db, dataDir: dir, spoolDir: path.join(dir, 'spool') }); // a second start: nothing to bring over
+    assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM transfers').get().n, 1);
+  } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 });

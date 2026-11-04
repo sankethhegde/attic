@@ -14,6 +14,7 @@ const ws = require('./ws');
 const { createHub } = require('./hub');
 const { createSelfStats } = require('./self-stats');
 const { createTransfers, publicTransfer } = require('./transfers');
+const { openDb } = require('./db');
 
 const UI_ROOT = path.resolve(__dirname, '..', 'ui');
 // Overridable so the tests can run a server on a throwaway config and data folder.
@@ -228,17 +229,23 @@ const listDevices = (viewerDeviceId, master) => allDevices().map(d => describeDe
 hub.setDescriber((id, who) => { const d = allDevices().find(x => x.id === id); return d ? describeDevice(d, who) : null; });
 
 // The HP measures itself while a master is watching the Devices view.
-// ---------- transfers (Phase 2, 2-4) ----------
+// ---------- transfers (Phase 2, 2-4 and 2-5) ----------
 // Files sent to another device wait on the HP (config "transferSpool", default data/transfers) until
-// that device collects them. Every change is pushed: to the receiving agent, and to the viewers who may
-// see the transfer (the master, the sender, anyone on the receiving device).
-const transfers = createTransfers({ dataDir: DATA_DIR, spoolDir: path.resolve(CONFIG.raw.transferSpool || path.join(DATA_DIR, 'transfers')),
-  log: m => console.log('  ' + m), onChange: t => announceTransfer(t) });
+// that device collects them. Records and history are in the database (data/attic.db). Every change,
+// and the progress of a moving transfer about twice a second, is pushed to the viewers who may see it
+// (the master, the sender, anyone on the receiving device); a new or cancelled one to the receiving agent.
+const db = openDb(DATA_DIR);
+const transfers = createTransfers({ db, dataDir: DATA_DIR, spoolDir: path.resolve(CONFIG.raw.transferSpool || path.join(DATA_DIR, 'transfers')),
+  log: m => console.log('  ' + m), onChange: t => announceTransfer(t), onProgress: (t, p) => announceProgress(t, p) });
+const mayWatch = t => v => v.master || v.accountId === t.userId || v.deviceId === t.to;
 function announceTransfer(t) {
   const pub = publicTransfer(t);
   if (t.status === 'queued') hub.toAgent(t.to, { type: 'transfer', transfer: pub });
   if (t.status === 'cancelled') hub.toAgent(t.to, { type: 'transfer-cancelled', id: t.id });
-  hub.toViewers(v => v.master || v.accountId === t.userId || v.deviceId === t.to, { type: 'transfer', transfer: pub });
+  hub.toViewers(mayWatch(t), { type: 'transfer', transfer: pub });
+}
+function announceProgress(t, p) {
+  hub.toViewers(mayWatch(t), { type: 'progress', id: t.id, stage: p.stage, bytesDone: p.bytesDone, size: t.size, speed: p.speed });
 }
 // A device coming online gets everything waiting for it: the offline queue (D-07).
 hub.setAgentHook((deviceId, send) => send({ type: 'inbox', transfers: transfers.pendingFor(deviceId).map(publicTransfer) }));
@@ -301,6 +308,8 @@ function sendFile(req, res, f, inline) {
   res.writeHead(range ? 206 : 200, headers);
   if (req.method === 'HEAD' || f.size === 0) { f.handle.close(); return res.end(); }
   const stream = f.handle.createReadStream({ start, end, autoClose: true });
+  // A transfer's delivery (2-5) counts what goes out, for its progress.
+  if (f.track) { const count = f.track(start); stream.on('data', c => count(c.length)); }
   stream.on('error', () => res.destroy());
   res.on('close', () => stream.destroy());
   stream.pipe(res);
@@ -483,14 +492,22 @@ async function handleApi(req, res, url, query) {
     if (m === 'GET') return sendJSON(res, 200, transfers.list({ master, userId: who.session.accountId, deviceId: deviceIdOf(req) }).map(publicTransfer));
     // Step 1: say what is coming and to which device. Step 2 is the PUT below.
     if (m === 'POST') {
-      const t = await transfers.create(body, { userId: who.session.accountId, from: deviceIdOf(req),
-        isDevice: id => id !== SERVER_DEVICE.id && pairing.list().some(d => d.id === id) });
+      const t = await transfers.create(body, { userId: who.session.accountId, userName: who.account.displayName,
+        from: deviceIdOf(req), fromName: req.device ? req.device.name : null,
+        isDevice: id => id === SERVER_DEVICE.id ? null : pairing.list().find(d => d.id === id) || null });
       return sendJSON(res, 201, publicTransfer(t));
     }
   }
+  // History (2-5, D-08): finished transfers a page at a time. ?limit=&before=<next>&device=&q=&status=
+  if (url === '/api/transfers/history' && m === 'GET') {
+    const who = requireSession(req);
+    const r = transfers.history({ master: who.session.type === 'master', userId: who.session.accountId, deviceId: deviceIdOf(req) },
+      { limit: query.get('limit') || 50, before: query.get('before'), device: query.get('device'), q: query.get('q'), status: query.get('status') });
+    return sendJSON(res, 200, { items: r.items.map(publicTransfer), next: r.next });
+  }
   // What is waiting for this device (its agent, or its interface).
   if (url === '/api/inbox' && m === 'GET') return sendJSON(res, 200, transfers.pendingFor(requireReceiver(req)).map(publicTransfer));
-  const tr = /^\/api\/transfers\/([A-Za-z0-9_-]{1,64})(\/file|\/received|\/failed)?$/.exec(url);
+  const tr = /^\/api\/transfers\/([A-Za-z0-9_-]{1,64})(\/file|\/received|\/failed|\/retry)?$/.exec(url);
   if (tr) {
     const [, id, sub] = tr;
     // The sender streams the file to the HP: exactly the size it declared, with X-Attic-Upload: 1.
@@ -502,6 +519,20 @@ async function handleApi(req, res, url, query) {
     if (sub === '/file' && (m === 'GET' || m === 'HEAD')) return sendFile(req, res, await transfers.openForDelivery(id, requireReceiver(req)), false);
     if (sub === '/received' && m === 'POST') return sendJSON(res, 200, publicTransfer(transfers.received(id, requireReceiver(req))));
     if (sub === '/failed' && m === 'POST') return sendJSON(res, 200, publicTransfer(transfers.failed(id, requireReceiver(req), body.error)));
+    // Retry (2-5): the sender or the master. Back in the queue if the HP still has the file; otherwise
+    // the answer is active / upload, and the sender PUTs the file again.
+    if (sub === '/retry' && m === 'POST') {
+      const who = requireSession(req);
+      return sendJSON(res, 200, publicTransfer(await transfers.retry(id, { userId: who.session.accountId, master: who.session.type === 'master' })));
+    }
+    // One transfer, as the list shows it.
+    if (!sub && m === 'GET') {
+      const who = requireSession(req);
+      const t = transfers.get(id);
+      const mine = t && (who.session.type === 'master' || t.userId === who.session.accountId || (deviceIdOf(req) && t.to === deviceIdOf(req)));
+      if (!mine) throw new AuthError(404, 'NOT_FOUND', 'That transfer no longer exists.');
+      return sendJSON(res, 200, publicTransfer(t));
+    }
     // Cancel: the sender or the master.
     if (!sub && m === 'DELETE') {
       const who = requireSession(req);

@@ -47,23 +47,27 @@ function client(port, from) {
       return { status: res.statusCode, json, headers: res.headers };
     },
     // Streams `size` bytes made by `gen(offset, n)` as the body; resolves with the response and the
-    // SHA-256 of what was sent. `abortAfter` cuts the connection after that many bytes.
-    upload(url, size, { gen = patternBytes, declared = size, abortAfter = null } = {}) {
+    // SHA-256 of what was sent. `abortAfter` cuts the connection after that many bytes; `chunkDelay`
+    // waits that many ms between 1 MiB chunks; `pauseAt` holds the rest until `gate` resolves.
+    upload(url, size, { gen = patternBytes, declared = size, abortAfter = null, chunkDelay = 0, pauseAt = null, gate = null } = {}) {
       return new Promise((resolve, reject) => {
         const hash = crypto.createHash('sha256');
         const r = request('PUT', url, { 'X-Attic-Upload': '1', 'Content-Type': 'application/octet-stream', 'Content-Length': declared });
         r.on('response', async res => { let t = ''; for await (const ch of res) t += ch; resolve({ status: res.statusCode, json: t ? JSON.parse(t) : null, sha: hash.digest('hex') }); });
         r.on('error', e => (abortAfter !== null ? resolve({ status: 0, aborted: true }) : reject(e)));
-        let off = 0;
+        let off = 0, paused = false;
         const CHUNK = 1 << 20;
         (function pump() {
           while (off < size) {
+            if (pauseAt !== null && !paused && off >= pauseAt) { paused = true; return gate.then(pump); }
             const n = Math.min(CHUNK, size - off);
             const b = gen(off, n);
             hash.update(b);
             off += n;
             if (abortAfter !== null && off >= abortAfter) { r.write(b); return setTimeout(() => r.destroy(), 100); }
-            if (!r.write(b)) return r.once('drain', pump);
+            const ok = r.write(b);
+            if (chunkDelay) return setTimeout(pump, chunkDelay);
+            if (!ok) return r.once('drain', pump);
           }
           r.end();
         })();

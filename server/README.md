@@ -4,7 +4,7 @@ The server that runs on the HP laptop. Built one milestone at a time from `docs/
 
 **Now: milestones 1–6, the whole brief.** Core Node only, no install step. It serves `ui/`, reports the real drives, owns accounts, passwords and sessions, browses, downloads and uploads real folders, enforces who owns what, and indexes every share for Photos, Videos, Other and the Dashboard. The browser's file mock is gone; only Devices and Transfers keep sample data, until Phase 2.
 
-**Phase 2 on the server:** discovery (2-1) answers clients looking for the HP on the home network, pairing (2-2) lets only devices the master approved use it, the live hub (2-3) carries each device's stats to the master as they change, and transfers (2-4) send a file to another device through the HP, holding it while that device is offline. Live transfer progress and history follow in 2-5.
+**Phase 2 on the server:** discovery (2-1) answers clients looking for the HP on the home network, pairing (2-2) lets only devices the master approved use it, the live hub (2-3) carries each device's stats to the master as they change, and transfers (2-4) send a file to another device through the HP, holding it while that device is offline. Transfers report live progress, can be retried, and are kept as history in a database (2-5).
 
 ## Run it
 
@@ -225,7 +225,7 @@ Every client talks only to the HP, so a file from the Acer to the ROG Ally goes 
 1. **Upload.** The sender says what's coming (`POST /api/transfers { to, fileName, size }`), then streams exactly that many bytes (`PUT /api/transfers/:id/file`, with `X-Attic-Upload: 1`). The HP spools the file to `server/data/transfers/<id>.bin`, or to the folder named in `"transferSpool"` in `config.json`. The transfer is then `queued`.
 2. **Delivery.** If the receiving device's agent is connected to the hub, it gets `{"type":"transfer","transfer":{…}}` at once. If not, then when it next connects, its first message after `hello` is `{"type":"inbox","transfers":[…]}` with everything waiting for it. That is the offline queue. It downloads `GET /api/transfers/:id/file` (resumable with `Range`) and confirms with `POST /api/transfers/:id/received`. The HP then deletes its copy.
 
-**Statuses** use the Transfers view's words: `active` (with `stage` `upload` or `deliver`), `queued`, `done`, `failed` and `cancelled`. `speed` (the delivery) and `uploadSpeed` are averages in bytes per second, recorded at the end. Live progress, Retry and history are 2-5.
+**Statuses** use the Transfers view's words: `active` (with `stage` `upload` or `deliver`), `queued`, `done`, `failed` and `cancelled`. Once a leg ends, `speed` (the delivery) and `uploadSpeed` hold its average in bytes per second. While a leg is moving, `bytesDone` and `speed` are live (2-5, below).
 
 | Route | Who | Does |
 | --- | --- | --- |
@@ -253,6 +253,37 @@ Every client talks only to the HP, so a file from the Acer to the ROG Ally goes 
 - A transfer to an offline device waits through an HP restart and is delivered when the device comes online.
 
 It also covers resuming, who may fetch, cancelling mid-upload, unpairing, expiry and bad input. `test-util.js` holds the helpers it shares.
+
+## Progress, Retry and history (Phase 2, milestone 2-5, D-06 and D-08)
+
+This is the HP's half of 2-5. Its other half, the Transfers view on real data, is the Acer's.
+
+**The database.** Transfers are rows in `server/data/attic.db`, a SQLite file opened through Node's built-in `node:sqlite`, so there's still nothing to install (`db.js`). Schema changes are numbered steps, run once each and recorded in `user_version`. 2-4's `transfers.json` is brought in on first start and renamed `transfers.json.imported`. Each row keeps the names as they were when the transfer started (`fromName`, `toName`, `userName`), so history still reads right after a device is unpaired or an account is removed. Finished transfers are kept for a year, up to the newest 10,000.
+
+**Progress (D-06).** While a leg moves, the HP counts its bytes: what arrives on an upload, and what goes out on a delivery (resumed ranges included). About twice a second it sends `{"type":"progress","id","stage","bytesDone","size","speed"}` to the hub viewers who may see that transfer. `speed` is bytes per second, smoothed. The last delivery event carries the whole size. `GET /api/transfers` and `GET /api/transfers/:id` show the same live figures. Progress isn't written to the database; each leg's result is, when it ends.
+
+**Retry** is for a `failed` or `cancelled` transfer, by the sender or the master:
+- If the HP still holds the file (a delivery failed), it goes back to `queued`, and the receiving agent hears about it as if it were new.
+- Otherwise (an upload failed, a transfer was cancelled, or a copy expired), it becomes `active` / `upload`, and the sender sends the file again with the same `PUT /api/transfers/:id/file`, from the device it was sent from.
+- `attempts` counts the tries.
+
+**History (D-08).** `GET /api/transfers/history` returns finished transfers (`done`, `failed`, `cancelled`) newest first, with sender, receiving device, sending device, size, and start and finish times. It returns `{ items, next }`; pass `next` back as `before` for the following page. It uses the same rule as the list: the master sees everything, anyone else their own transfers and the ones to their device.
+
+| Route | Who | Does |
+| --- | --- | --- |
+| `GET /api/transfers/:id` | who may see it | One transfer, with live progress |
+| `POST /api/transfers/:id/retry` | the sender or the master | `queued` again, or `active` / `upload` for a new PUT |
+| `GET /api/transfers/history` | signed in | `?limit=` (default 50, at most 200), `&before=<next>`, `&status=done\|failed\|cancelled`, `&device=<id>` (either end), `&q=` (part of the file name) |
+
+`GET /api/transfers` (the Transfers view's list) is capped at the newest 200 and takes `?limit=` up to 500.
+
+`transfers.test.js` covers 2-5 as well:
+- progress on both legs;
+- live bytes in the list;
+- Retry with and without the HP's copy;
+- paging and every filter, including a `%` in the search;
+- names kept after unpairing, and history across a restart;
+- bringing in `transfers.json`.
 
 ## Rules that carry over
 
