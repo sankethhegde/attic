@@ -90,7 +90,9 @@ for (const h of views) {
     return (err ? 'ERROR STATE ' : 'ok') + ' · ' + document.title + ' · ' + content + ' items';`);
 }
 results.serverSection = await ev(`location.hash = '#/settings'; for (let i = 0; i < 30 && (!document.querySelector('#srv-now') || document.querySelector('#srv-now .skel')); i++) await new Promise(r => setTimeout(r, 100)); return document.querySelector('#srv-now') && document.querySelector('#srv-now').textContent`);
-results.reloadKeepsSession = await ev(`return !!(await Attic.api.getSession())`);
+results.hubInbox = await ev(`for (let i = 0; i < 30 && !document.querySelector('#inbox-path').textContent; i++) await new Promise(r => setTimeout(r, 100));
+  const p = document.querySelector('#inbox-path').textContent; return /Downloads\\\\Attic Hub Inbox$/.test(p) ? p : 'ERR no inbox path: ' + p`);
+results.reloadKeepsSession =await ev(`return !!(await Attic.api.getSession())`);
 results.consoleErrors = errors.filter(e => !/fonts\.(googleapis|gstatic)/.test(e));
 
 console.log(JSON.stringify(results, null, 2));

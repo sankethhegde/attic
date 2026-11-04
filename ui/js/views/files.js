@@ -74,6 +74,7 @@
         <button class="btn btn-secondary btn-block" id="keep-perm" style="margin-bottom:10px">${U.icon('lock')}Keep permanently</button>` : ''}
       <div class="panel-actions">
         <a class="btn btn-secondary" href="${U.esc(api.downloadUrl(e))}" download="${U.esc(e.name)}">${U.icon('download')}Download</a>
+        <button class="btn btn-secondary" id="send-dev">${U.icon('transfer')}Send to device</button>
         <span class="tip" data-tip="Deleting arrives in Phase 2" tabindex="0"><button class="btn btn-secondary" disabled>${U.icon('trash')}Delete</button></span>
       </div></aside>`;
   }
@@ -345,6 +346,8 @@
       };
       pc.querySelector('#panel-close').onclick = close;
       pc.querySelector('#veil').onclick = close;
+      const file = selected;
+      pc.querySelector('#send-dev').onclick = () => root.Attic.send.open({ file });
       pc._close = close;
     }
 

@@ -421,8 +421,8 @@ h1, h2, h3 { margin: 0; }
 .kv { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 8px 12px; font-size: 13.5px; margin: 0 0 16px; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-.panel-actions { display: flex; gap: 8px; }
-.panel-actions .btn { flex: 1; }
+.panel-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.panel-actions .btn { flex: 1 1 auto; }
 .tip { position: relative; display: inline-flex; flex: 1; }
 .tip .btn { width: 100%; }
 .tip::after {
@@ -659,6 +659,36 @@ h1, h2, h3 { margin: 0; }
 .hub-empty { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding: 14px 16px; border: 1.5px dashed var(--line); border-radius: 14px; color: var(--muted); font-size: 14px; }
 .hub-empty .ic { flex: none; color: var(--accent); }
 .hub-empty b { color: var(--ink); }
+
+/* ---------- send to a device (2-4) ---------- */
+.send .banner { margin-bottom: 12px; }
+.send-h { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); margin: 14px 0 8px; }
+.send-empty { margin: 0 0 8px; font-size: 13.5px; color: var(--muted); }
+.send-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 220px; overflow: auto; }
+.send-items li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--field); min-width: 0; }
+.send-ic { flex: none; display: grid; place-items: center; width: 28px; color: var(--accent); }
+.send-nm { flex: 1; min-width: 0; display: flex; flex-direction: column; font-weight: 600; font-size: 14px; }
+.send-nm .c { font-weight: 500; font-size: 12.5px; color: var(--muted); }
+.send-total { margin: 6px 2px 0; font-size: 13px; color: var(--muted); }
+.send-pick { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.send-to { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.send-dev { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--r-md); border: 1.5px solid var(--line); background: var(--field); cursor: pointer; text-align: left; font: inherit; color: inherit; min-width: 0; }
+.send-dev:hover, .send-dev:focus-visible { border-color: var(--accent); outline: none; }
+.send-dev:focus-visible { box-shadow: 0 0 0 4px var(--focus-ring); }
+.send-dev.on { border-color: var(--accent); background: var(--surface); box-shadow: inset 0 0 0 1px var(--accent); }
+.send-art { flex: none; }
+.send-dn { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.send-dn b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.send-dn .c { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.send-dn .dot { width: 7px; height: 7px; }
+.send .form-error { margin-top: 10px; }
+.send-progress { margin-top: 14px; display: grid; gap: 6px; }
+.inbox-recent { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; text-align: right; min-width: 0; }
+.inbox-recent li { display: flex; flex-direction: column; min-width: 0; }
+.inbox-recent .nm { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-recent .c { font-size: 12px; color: var(--muted); }
+.send-progress-top { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--muted); }
+.send-progress-top > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- pairing (2-2) ---------- */
 .pair-code input { font-family: var(--mono); font-size: 22px; font-weight: 700; letter-spacing: 4px; }

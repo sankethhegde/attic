@@ -1,7 +1,7 @@
 // Devices view (Attic Hub): a card per device paired with the HP (Phase 2, 2-2). The master pairs new
 // devices with a one-time code and unpairs old ones. It's live (2-3): one WebSocket to the HP brings each
-// device's stats as its agent reports them, and who comes and goes. Send-to-device arrives in 2-4, so its
-// button is present but disabled, and the layout doesn't change when it arrives.
+// device's stats as its agent reports them, and who comes and goes. Each other device's card has Send a
+// file (2-4, views/send.js).
 (function (root) {
   'use strict';
   const { util: U, api, ui } = root.Attic;
@@ -61,7 +61,7 @@
       </div>
       ${statsHTML(d, master)}
       <div class="hub-actions">
-        <span class="tip" data-tip="Sending to devices arrives in milestone 2-4" tabindex="0"><button class="btn btn-secondary btn-sm" disabled>${U.icon('transfer')}Send a file</button></span>
+        ${d.thisPC || d.role === 'server' ? '' : `<button class="btn btn-secondary btn-sm" data-send="${U.esc(d.id)}">${U.icon('transfer')}Send a file</button>`}
         ${master && d.role !== 'server' ? `<button class="btn btn-ghost btn-sm" data-unpair="${U.esc(d.id)}">${U.icon('x')}Unpair</button>` : ''}
       </div>
     </article>`;
@@ -230,6 +230,8 @@
       const b = e.target.closest('[data-unpair]');
       const d = b && list.find(x => x.id === b.dataset.unpair);
       if (d) unpair(d, master, () => load(true));
+      const s = e.target.closest('[data-send]');
+      if (s) root.Attic.send.open({ to: s.dataset.send });
     });
     const pairBtn = main.querySelector('#pair');
     if (pairBtn) pairBtn.onclick = () => pairDialog(() => load(false));

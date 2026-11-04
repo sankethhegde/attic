@@ -51,6 +51,11 @@
           <div class="ctl" id="srv-now"><span class="skel" style="display:inline-block;width:180px;height:14px"></span></div></div>
         <div class="set-row"><div class="lbl">Live stats<small>While this PC is paired, the tool sends the HP its CPU, RAM, disk, battery and network every few seconds, for the master’s Devices view.</small></div>
           <div class="ctl" id="srv-agent"><span class="skel" style="display:inline-block;width:120px;height:14px"></span></div></div>
+        <div class="set-row"><div class="lbl">Hub Inbox<small>Files other devices send to this PC land here, private to you. Choosing another folder comes in a later update.</small></div>
+          <div class="ctl" style="flex-wrap:wrap;justify-content:flex-end;gap:8px"><span class="mono" id="inbox-path" style="font-size:12.5px;word-break:break-all"></span>
+            <button class="btn btn-secondary btn-sm" id="inbox-open">${U.icon('folder')}Open folder</button></div></div>
+        <div class="set-row" id="inbox-recent-row" hidden><div class="lbl">Received<small>The latest files that arrived while the tool was open.</small></div>
+          <div class="ctl"><ul class="inbox-recent" id="inbox-recent"></ul></div></div>
         <div class="set-row"><div class="lbl">Use another server<small>Search the network again, or type an address. You’ll sign in on the server you pick.</small></div>
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="srv-change">${U.icon('refresh')}Change server</button></div></div>
       </section>` : ''}
@@ -122,6 +127,20 @@
         const st = sv && sv.agent || 'off';
         main.querySelector('#srv-agent').innerHTML = `<span class="${st === 'reporting' ? '' : 'muted'}">${st === 'reporting' ? '<span class="dot on" style="display:inline-block;margin-right:8px"></span>' : ''}${AGENT[st] || st}</span>`;
       }).catch(() => { srvNow.innerHTML = '<span class="muted">Not known</span>'; });
+      // Phase 2, 2-4: the Hub Inbox folder.
+      if (root.atticDesktop.inbox) {
+        root.atticDesktop.inbox.path().then(p => { main.querySelector('#inbox-path').textContent = p || ''; }).catch(() => {});
+        root.atticDesktop.inbox.recent().then(list => {
+          if (!list || !list.length) return;
+          main.querySelector('#inbox-recent-row').hidden = false;
+          main.querySelector('#inbox-recent').innerHTML = list.slice(0, 5).map(r =>
+            `<li><span class="nm">${U.nameHTML(r.name)}</span><span class="c"><span class="mono">${U.formatBytes(r.size)}</span> · ${U.relDate(r.at)}</span></li>`).join('');
+        }).catch(() => {});
+        main.querySelector('#inbox-open').onclick = async () => {
+          const err = await root.atticDesktop.inbox.open().catch(e => e.message);
+          if (err) ui.toast('Couldn’t open the Hub Inbox: ' + err, 'error');
+        };
+      }
       main.querySelector('#srv-change').onclick = async () => {
         const ok = await ui.confirm({ title: 'Change server?', confirm: 'Change server',
           lead: 'The tool goes back to its start screen to find or type another server. You’ll need to sign in there.' });
