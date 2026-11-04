@@ -2,7 +2,7 @@
 
 Attic Hub is one installable Windows desktop tool. It stores your files on the HP home server and connects your home devices (the HP, the Acer, the ROG Ally and the iPhone) over the home network. It grew out of Attic, the home file server interface built in Phase 1A.
 
-**Status: Phase 1C, the HP server.** Files, shares, accounts and ownership are real and live on the HP: the server in `server/` serves the interface on the home network, checks every password, and decides who sees which file. Devices and Transfers still show sample data until the device agents of Phase 2. The connection isn't encrypted yet (HTTPS is a later step), so use Attic on the home Wi-Fi only.
+**Status: Phase 2, the Devices module, built.** Files, shares, accounts and ownership live on the HP (Phase 1C): the server in `server/` serves the interface on the home network, checks every password, and decides who sees which file. Devices find the HP, pair with it, report live stats, and send files to each other through it, with progress and history (Phase 2). Nothing in the interface is sample data any more. The connection isn't encrypted yet (HTTPS is a later step), so use Attic on the home Wi-Fi only.
 
 ## Layout
 
@@ -46,6 +46,7 @@ Electron's binary download is an install script, which npm may hold for approval
 | `node scripts/pairing-test.mjs [exe]` | The 2-2 flow end to end: pairs the tool with a throwaway server using a code, pairs a second device from Pair a device, unpairs, restarts, and is unpaired while in use |
 | `node scripts/live-stats-test.mjs [exe]` | The 2-3 flow end to end: after pairing, the tool's agent reports to a throwaway server; the Devices view goes live; a second device's report is timed to the screen |
 | `node scripts/send-test.mjs [exe]` | The 2-4 flow end to end: sends from the tool to an offline device, and to the tool while it's open and while it's closed, checking every file arrives intact in the Hub Inbox. `BIG=1` adds a 2 GB file |
+| `node scripts/transfers-test.mjs [exe]` | The 2-5 flow end to end: live progress, a finished transfer moving to History, Cancel, Retry (automatic, and after a reload by choosing the file), filters, search, paging, and 360px |
 | `node scripts/serve-ui.js` | Serves `ui/` on localhost, to check it in a normal browser |
 
 ## First run
@@ -58,8 +59,9 @@ On a fresh server the interface shows setup for the master account, with a passw
 - **Ownership:** every file has an `ownerId` (`null` means the common space) and an `uploadedBy`. The server applies it to every listing, download, upload and index: a device sees only its own and common files; the master sees everything.
 - **Pairing (Phase 2, 2-2):** a device the HP doesn't know sees "Pair this device" before anything else, and types the one-time code the master gets from Devices → Pair a device. The HP keeps the device's identity in an HttpOnly cookie; the desktop tool writes it to disk straight away, so pairing survives restarts. The master unpairs a device from its card; a device unpaired while in use goes back to the pairing screen.
 - **Devices** are the HP's paired devices, live (2-3): each paired PC's agent reports CPU, RAM, disk, battery and network every 3 seconds, and the Devices view hears every change over one WebSocket (`/api/hub`). Only the master sees stats.
-- **Send to a device (2-4):** "Send a file" on another device's card (files or a folder from this device), and "Send to device" in a file's details in Files (a file on the HP). Both open the Send dialog: choose what and which device, with offline devices marked "it gets this when it comes online". The file goes to the HP, which holds it until the receiving device's agent collects it into that device's Hub Inbox (`Downloads\Attic Hub Inbox`, shown in Settings). **Transfers** is still sample data from `ui/js/mockgen.js` (`generateHub`) until 2-5.
-- **Browser storage:** `fs.settings` (theme, background, views) and `fs.mockHub` (the sample devices) in localStorage, plus custom backgrounds in IndexedDB (`fs.backgrounds`). Accounts, sessions, shares and files are on the server.
+- **Send to a device (2-4):** "Send a file" on another device's card (files or a folder from this device), and "Send to device" in a file's details in Files (a file on the HP). Both open the Send dialog: choose what and which device, with offline devices marked "it gets this when it comes online". The file goes to the HP, which holds it until the receiving device's agent collects it into that device's Hub Inbox (`Downloads\Attic Hub Inbox`, shown in Settings).
+- **Transfers (2-5):** "Now" shows what's moving or waiting, with live progress over the same WebSocket. "History" pages through finished transfers from the HP's database, with status and device filters and a file-name search. The sender and the master can Cancel and Retry. When the HP no longer holds the file, Retry sends it again from the device it came from: automatically if this page still has it, otherwise after asking for it.
+- **Browser storage:** `fs.settings` (theme, background, views) in localStorage, plus custom backgrounds in IndexedDB (`fs.backgrounds`). Everything else is on the server. The sample data of Phase 1A–1B (`ui/js/mockgen.js`) is gone.
 - **The desktop tool finds the HP by itself** (Phase 2, 2-1). It starts on a "Looking for server" screen (`ui/connect.html`), finds the HP through `agent/connect.js` (the last server used, then a discovery broadcast), and opens the interface the HP serves, so sign-in and files are real. If nothing answers, the screen explains why and takes a typed address. Settings → Server shows which HP it's using and can change it.
 
 ## Brand

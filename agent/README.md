@@ -66,6 +66,10 @@ Tests:
 - `node --test "agent/*.test.js"` covers `inbox.js`, and `receiver.js` against a stand-in HP: confirming, resuming, and cancelled transfers.
 - `desktop/scripts/send-test.mjs` runs the real tool against a throwaway server, sending both ways, including a file sent while the tool was closed. `BIG=1` adds a 2 GB file.
 
+## Progress, Retry and history (milestone 2-5, D-06 and D-08)
+
+The agent needs nothing new for 2-5. Retry on the HP re-announces a queued transfer exactly like a new one, and `receiver.js` collects it as before. The Transfers view in `ui/` does the rest, as described in the main README.
+
 ## Still to come
 
-- **2-5:** the Transfers view on real data (progress, Retry, history). It shows sample data from `ui/js/mockgen.js` until then.
+Phase 3, tool polish: tray, notifications for received files, start with Windows, Explorer's "Send to Attic Hub", choosing the Hub Inbox folder, and the ROG Ally's low-resource mode.
