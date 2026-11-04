@@ -1,17 +1,18 @@
 // api.js — the ONLY module that touches storage. No screen reads localStorage or calls fetch.
 // Every function returns a promise and every one can fail.
 //
-// Phase 1C: accounts, passwords, sessions, shares, files and ownership are the HP server's. Phase 2, 2-2:
-// pairing and the device list are too. Transfers (and the sample devices they name) are still a browser
-// mock until 2-4 and 2-5.
+// Accounts, passwords, sessions, shares, files and ownership are the HP server's (Phase 1C), and so are
+// pairing, devices, live stats and transfers (Phase 2). The browser keeps only its own preferences and
+// login backgrounds.
 (function (root) {
   'use strict';
   const U = root.Attic.util;
   const idb = root.Attic.idb;
 
-  const K = { settings: 'fs.settings', hub: 'fs.mockHub' };
-  // Left behind by the browser mock of Phase 1A–1C: the generated file index (a few MB) and its shares.
-  try { ['fs.mockIndex', 'fs.shares', 'fs.accounts', 'fs.session'].forEach(k => localStorage.removeItem(k)); } catch (e) { /* storage blocked */ }
+  const K = { settings: 'fs.settings' };
+  // Left behind by the browser mocks of Phase 1A–2: the generated file index (a few MB), its shares, and
+  // the sample devices and transfers.
+  try { ['fs.mockIndex', 'fs.shares', 'fs.accounts', 'fs.session', 'fs.mockHub'].forEach(k => localStorage.removeItem(k)); } catch (e) { /* storage blocked */ }
   const MAX_CUSTOM_BG = 10, MAX_BG_BYTES = 5e6;
   const BG_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
@@ -188,41 +189,40 @@
     return c;
   }
 
-  // ---------- hub mock storage ----------
-  function hubData() {
-    let hub = read(K.hub, null);
-    if (!hub) { hub = root.Attic.mock.generateHub({ accounts: accounts() }); saveHub(hub); }
-    return hub;
-  }
-  function saveHub(hub) { write(K.hub, hub); }
+  // ---------- sending files to devices (2-4, 2-5) ----------
+  // What this page sent, by transfer id, so Retry can send it again without asking: { file } for a file
+  // from this device, { entry } for one on the HP. Uploads in flight, by id, so Cancel can stop them.
+  const sentFiles = new Map(), uploads = new Map();
 
-  // Smooth, believable movement: a few slow sine waves per device, so each poll differs a little.
-  function liveStats(d, t) {
-    const s = U.hash(d.id) % 1000, w = (p, a) => Math.sin(t / p + s) * a;
-    const b = d.base;
-    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  // Streams `body` as transfer `id`'s file. XMLHttpRequest rather than fetch: only it reports upload
+  // progress. → { promise (the transfer, now queued), cancel }
+  function putTransferFile(id, body, onProgress) {
+    const xhr = new XMLHttpRequest();
     return {
-      cpu: Math.round(clamp(b.cpu + w(7000, 9) + w(2300, 5), 1, 99)),
-      ramTotal: b.ramTotal,
-      ramUsed: Math.round(clamp(b.ramUsed + w(11000, b.ramTotal * 0.04), 0, b.ramTotal)),
-      diskTotal: b.diskTotal,
-      diskFree: b.diskFree,
-      battery: b.battery,
-      charging: !!b.charging
+      cancel() { xhr.abort(); },
+      promise: new Promise((resolve, reject) => {
+        xhr.open('PUT', `/api/transfers/${encodeURIComponent(id)}/file`);
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+        xhr.setRequestHeader('X-Attic-Upload', '1');
+        xhr.upload.onprogress = e => onProgress(e.loaded);
+        xhr.onload = () => {
+          let data = null;
+          try { data = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
+          if (xhr.status === 200) return resolve(data);
+          reject(new ApiError((data && data.code) || 'SERVER', (data && data.message) || 'Sending failed.'));
+        };
+        xhr.onerror = () => reject(new ApiError('UNREACHABLE', 'Could not reach the server.'));
+        xhr.onabort = () => reject(new ApiError('CANCELLED', 'Cancelled'));
+        xhr.send(body);
+      })
     };
   }
 
-  // Active transfers progress from their start time and speed; finished ones are written back once.
-  function advanceTransfers(hub) {
-    const t = Date.now();
-    let changed = false;
-    for (const x of hub.transfers) {
-      if (x.status !== 'active') continue;
-      x.bytesDone = Math.min(x.size, Math.round((t - Date.parse(x.startedAt)) / 1000 * x.speed));
-      if (x.bytesDone >= x.size) { x.status = 'done'; x.finishedAt = new Date(Date.parse(x.startedAt) + x.size / x.speed * 1000).toISOString(); changed = true; }
-    }
-    if (changed) saveHub(hub);
-    return hub;
+  // A file on the HP, read back to be sent to a device (the HP has no copy-in-place for transfers).
+  async function fetchFromHP(entry, name) {
+    const res = await fetch(api.downloadUrl(entry), { credentials: 'same-origin' }).catch(() => null);
+    if (!res || !res.ok) throw new ApiError('UNREACHABLE', `Couldn’t read ${name} from the HP.`);
+    return res.blob();
   }
 
   function matchQuery(name, q) { return !q || name.toLowerCase().includes(q.toLowerCase()); }
@@ -258,11 +258,9 @@
       return (await http('GET', '/api/setup')).needsSetup;
     },
 
-    // The server creates the master. The mock hub (devices and transfers, until Phase 2) is regenerated
-    // on first read, owned by the new master.
+    // The server creates the master.
     async createMaster({ displayName, username, password }) {
       const master = await http('POST', '/api/setup', { displayName, username, password });
-      try { localStorage.removeItem(K.hub); } catch (e) { /* ignore */ }
       forgetIndex();
       return master;
     },
@@ -496,8 +494,10 @@
     // The live Devices view: one WebSocket to the HP. `onList` gets the whole list first, then `onChange`
     // one device at a time and `onRemoved` an id on unpair. `onStatus` hears 'live' or 'reconnecting'. A
     // dropped connection is retried; one the HP closes because the session or pairing ended sends the app
-    // back to sign-in or pairing. Returns { close }.
-    openHub({ onList, onChange, onRemoved, onStatus = () => {} }) {
+    // back to sign-in or pairing. The Transfers view (2-5) listens on the same connection: `onTransfer`
+    // gets a transfer whenever it changes, `onProgress` { id, stage, bytesDone, size, speed } about twice a
+    // second while one moves. Returns { close }.
+    openHub({ onList = () => {}, onChange = () => {}, onRemoved = () => {}, onTransfer = () => {}, onProgress = () => {}, onStatus = () => {} }) {
       let ws = null, closed = false, tries = 0, timer = 0;
       const connect = () => {
         if (closed) return;
@@ -508,6 +508,8 @@
           if (m.type === 'devices') { tries = 0; onStatus('live'); onList(m.devices.map(hubDevice)); }
           else if (m.type === 'device') onChange(hubDevice(m.device));
           else if (m.type === 'removed') onRemoved(m.id);
+          else if (m.type === 'transfer' && m.transfer) onTransfer(m.transfer);
+          else if (m.type === 'progress') onProgress(m);
         };
         ws.onclose = async ev => {
           if (closed) return;
@@ -537,55 +539,51 @@
     async createPairCode() { return http('POST', '/api/pairing/codes', {}); },
     async cancelPairCode(id) { return http('DELETE', '/api/pairing/codes/' + encodeURIComponent(id), {}); },
 
-    // ---------- hub: transfers (mock until 2-4 and 2-5) ----------
-    // The sample devices the mock transfers name, so the Transfers view can label them.
-    async listTransferDevices() {
-      await delay(true);
-      const session = sessionOrThrow();
-      const hub = hubData();
-      const t = Date.now();
-      return hub.devices.map(d => {
-        const out = { id: d.id, name: d.name, role: d.role, os: d.os, kind: d.kind, connection: d.connection, ip: d.ip,
-          online: d.online, lastSeenAt: d.online ? new Date(t).toISOString() : d.lastSeenAt, thisPC: !!d.thisPC, browserOnly: !!d.browserOnly, stats: null };
-        if (session.type === 'master' && d.base && d.online) out.stats = liveStats(d, t);
-        return out;
-      });
+    // ---------- transfers (the HP's: 2-5 progress, Retry and history) ----------
+    // The newest 200, open ones included: the master sees all, anyone else what they sent and what's for
+    // their device. While a leg moves, `bytesDone` and `speed` are live; the hub sends the same as
+    // { type: "progress" } (see openHub).
+    async listTransfers() { return http('GET', '/api/transfers'); },
+
+    // Finished transfers, newest first, a page at a time: { items, next }. Pass `next` back as `before`.
+    async transferHistory({ before, status, device, q, limit = 50 } = {}) {
+      const p = new URLSearchParams({ limit: String(limit) });
+      if (before) p.set('before', before);
+      if (status) p.set('status', status);
+      if (device) p.set('device', device);
+      if (q) p.set('q', q);
+      return http('GET', '/api/transfers/history?' + p);
     },
 
-    // The master sees every transfer; anyone else only their own.
-    async listTransfers() {
-      await delay(true);
-      const session = sessionOrThrow();
-      const hub = advanceTransfers(hubData());
-      return hub.transfers.filter(x => session.type === 'master' || x.userId === session.accountId)
-        .map(x => Object.assign({}, x)).sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-    },
+    // Retry (the sender or the master) a failed or cancelled transfer. If the HP still has the file it's
+    // queued again. If not, it waits for the file (`active` / `upload`): resendTransfer sends it from this
+    // device, using the file this page sent earlier when it still has it, or one the person chooses.
+    async retryTransfer(id) { return http('POST', `/api/transfers/${encodeURIComponent(id)}/retry`, {}); },
 
-    async retryTransfer(id) {
-      await delay(true);
-      const session = sessionOrThrow();
-      const hub = hubData();
-      const x = hub.transfers.find(t => t.id === id && (session.type === 'master' || t.userId === session.accountId));
-      if (!x) throw new ApiError('NOT_FOUND', 'That transfer no longer exists.');
-      if (x.status !== 'failed' && x.status !== 'cancelled') throw new ApiError('INVALID', 'Only failed or cancelled transfers can be retried.');
-      const to = hub.devices.find(d => d.id === x.to), from = hub.devices.find(d => d.id === x.from);
-      const waiting = !(to && to.online && from && from.online);
-      Object.assign(x, { status: waiting ? 'queued' : 'active', startedAt: new Date().toISOString(), finishedAt: null, bytesDone: 0, error: null,
-        speed: waiting ? null : x.speed || 20e6 });
-      saveHub(hub);
-      return Object.assign({}, x);
-    },
-
+    // Cancel (the sender or the master): an upload in flight here stops too.
     async cancelTransfer(id) {
-      await delay(true);
-      const session = sessionOrThrow();
-      const hub = advanceTransfers(hubData());
-      const x = hub.transfers.find(t => t.id === id && (session.type === 'master' || t.userId === session.accountId));
-      if (!x) throw new ApiError('NOT_FOUND', 'That transfer no longer exists.');
-      if (x.status !== 'active' && x.status !== 'queued') throw new ApiError('INVALID', 'Only active or queued transfers can be cancelled.');
-      Object.assign(x, { status: 'cancelled', finishedAt: new Date().toISOString() });
-      saveHub(hub);
-      return Object.assign({}, x);
+      const job = uploads.get(id);
+      if (job) job.cancel();
+      return http('DELETE', '/api/transfers/' + encodeURIComponent(id), {});
+    },
+
+    hasFileFor: id => sentFiles.has(id),
+    isUploading: id => uploads.has(id),
+    // `file`: a File the person chose (it must be the same size), else the one this page sent before.
+    resendTransfer(t, file, onProgress = () => {}) {
+      const src = file ? { file } : sentFiles.get(t.id);
+      if (!src) throw new ApiError('INVALID', 'Choose the file to send again.');
+      if (file && file.size !== t.size) throw new ApiError('INVALID', `That file is ${U.formatBytes(file.size)}; ${t.fileName} was ${U.formatBytes(t.size)}. Choose the same file.`);
+      let job = null, cancelled = false;
+      const promise = (async () => {
+        const body = src.file || await fetchFromHP(src.entry, t.fileName);
+        if (cancelled) throw new ApiError('CANCELLED', 'Cancelled');
+        sentFiles.set(t.id, src);
+        job = putTransferFile(t.id, body, loaded => onProgress(loaded, t.size));
+        uploads.set(t.id, job);
+        try { return await job.promise; } finally { uploads.delete(t.id); }
+      })();
+      return { promise, cancel() { cancelled = true; if (job) job.cancel(); } };
     },
 
     // ---------- send to a device (the HP's: 2-4) ----------
@@ -596,24 +594,8 @@
     // no copy-in-place for transfers). `onProgress({ phase: 'fetch' | 'upload', name, loaded, total })`.
     // Returns { cancel, promise }; the promise resolves with the transfers, now queued on the HP.
     sendToDevice({ files, to, onProgress = () => {} }) {
-      let xhr = null, current = null, cancelled = false;
+      let job = null, current = null, cancelled = false;
       const total = files.reduce((a, f) => a + f.size, 0);
-      const putFile = (t, body, done, name) => new Promise((resolve, reject) => {
-        xhr = new XMLHttpRequest();
-        xhr.open('PUT', `/api/transfers/${encodeURIComponent(t.id)}/file`);
-        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-        xhr.setRequestHeader('X-Attic-Upload', '1');
-        xhr.upload.onprogress = e => onProgress({ phase: 'upload', name, loaded: done + e.loaded, total });
-        xhr.onload = () => {
-          let data = null;
-          try { data = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
-          if (xhr.status === 200) return resolve(data);
-          reject(new ApiError((data && data.code) || 'SERVER', (data && data.message) || 'Sending failed.'));
-        };
-        xhr.onerror = () => reject(new ApiError('UNREACHABLE', 'Could not reach the server.'));
-        xhr.onabort = () => reject(new ApiError('CANCELLED', 'Cancelled'));
-        xhr.send(body);
-      });
       const promise = (async () => {
         if (!to) throw new ApiError('INVALID', 'Choose a device to send to.');
         if (!files.length) throw new ApiError('INVALID', 'Choose at least one file.');
@@ -624,12 +606,14 @@
           let body = f.source;
           if (!body) {
             onProgress({ phase: 'fetch', name: f.name, loaded: done, total });
-            const res = await fetch(api.downloadUrl(f.entry), { credentials: 'same-origin' }).catch(() => null);
-            if (!res || !res.ok) throw new ApiError('UNREACHABLE', `Couldn’t read ${f.name} from the HP.`);
-            body = await res.blob();
+            body = await fetchFromHP(f.entry, f.name);
           }
           current = await http('POST', '/api/transfers', { to: to.id, fileName: f.name, size: body.size });
-          out.push(await putFile(current, body, done, f.name));
+          // Kept for this session, so Retry can send it again without asking (a file on the HP is re-read).
+          sentFiles.set(current.id, f.source ? { file: f.source } : { entry: f.entry });
+          job = putTransferFile(current.id, body, loaded => onProgress({ phase: 'upload', name: f.name, loaded: done + loaded, total }));
+          uploads.set(current.id, job);
+          try { out.push(await job.promise); } finally { uploads.delete(current.id); }
           current = null;
           done += f.size;
           onProgress({ phase: 'upload', name: f.name, loaded: done, total });
@@ -640,7 +624,7 @@
         promise,
         cancel() {
           cancelled = true;
-          if (xhr) xhr.abort();
+          if (job) job.cancel();
           if (current) http('DELETE', '/api/transfers/' + encodeURIComponent(current.id), {}).catch(() => {});
         }
       };

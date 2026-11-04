@@ -712,6 +712,15 @@ h1, h2, h3 { margin: 0; }
 .tr-main .meter { height: 6px; }
 .tr-main .c { font-size: 12.5px; color: var(--muted); }
 .tr-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.tr-section { margin-bottom: 22px; }
+.tr-h { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); margin: 0 0 10px; }
+.tr-hist-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.tr-hist-head .tr-h { margin: 0; }
+.tr-device { height: 36px; max-width: 220px; }
+.tr-quiet { display: flex; align-items: center; gap: 8px; margin: 0; padding: 14px 16px; border-radius: 14px; background: var(--surface); border: 1px dashed var(--line); color: var(--muted); font-size: 14px; }
+.tr-quiet .ic { color: var(--success); flex: none; }
+.tr-by { color: var(--muted); }
+.tr-more { display: flex; justify-content: center; margin-top: 12px; }
 .tag-done { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); }
 .dev-strip { display: flex; gap: 10px; flex-wrap: wrap; }
 .dev-chip { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border-radius: 12px; background: var(--surface-2); text-decoration: none; color: var(--ink); font-weight: 600; font-size: 13.5px; }

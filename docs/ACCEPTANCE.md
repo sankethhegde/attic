@@ -202,7 +202,25 @@ Tests: `send-test.mjs` 19/19 (20/20 with `BIG=1`), on the dev build and the pack
 
 Found during the run: a device the HP counts as online without an agent (it made a request in the last 2 minutes) can't collect a file yet. The dialog no longer promises "collecting it now" to such a device.
 
-Still to do with the real machines: send from the Acer to the ROG Ally over the home network, once both are paired with the real HP. Not yet built: the Transfers view on real data (2-5).
+Still to do with the real machines: send from the Acer to the ROG Ally over the home network, once both are paired with the real HP. The Transfers view on real data is 2-5, below.
+
+## Phase 2, milestone 2-5: Transfers on real data, the Acer's half (4 Nov 2026)
+
+The HP's half (live progress events, Retry, history in a SQLite database) was built and merged in pull request #13. This is the Transfers view, built against it. The last sample data (`ui/js/mockgen.js`) is gone.
+
+| Check | Result | How it was verified |
+| --- | --- | --- |
+| Transfers view: progress, speed, success or failure (D-06) | ✅ | "Now" lists what's moving or waiting. A 40 MB upload from the Ally showed 0.2%, 15%, then 30%, with bytes and speed, live over the hub. Once delivered it moved to History as "Done · 41.9 MB · 150 MB/s" without a reload |
+| Retry (D-06) | ✅ | After a Cancel, Retry re-sent the file from this PC by itself, because the HP had deleted its copy (attempt 2). After a reload the page no longer has the file, so Retry asked for it: the file picker opened, and the chosen file went out (attempt 3) |
+| Cancel | ✅ | It moves the transfer to History as Cancelled, and stops an upload in flight |
+| Transfer history with sender, receiver, size and time (D-08) | ✅ | From the HP's database, 50 at a time with Show older (50, then 54). Status filter, device filter, and search by file name ("Screenshot 4" → 10). Names are kept as they were, and the master sees "sent by …" |
+| Where a waiting file is | ✅ | "On the HP, waiting for ROG Ally to collect it"; "The HP needs the file again" with Send the file, on the device that sent it |
+| No polling while live | ✅ | No `/api/transfers` requests in 6 s while the hub is connected; every 5 s while it's down |
+| 360px | ✅ | No sideways scrolling |
+
+Tests: `transfers-test.mjs` 17/17. Also `send-test.mjs` 19/19, `pairing-test.mjs` 19/19, `live-stats-test.mjs` 17/17, `discovery-test.mjs` 13/13, `smoke-test.mjs` (0 console errors), `node --test "agent/*.test.js"` 23/23 and `node --test "server/*.test.js"` 126/126.
+
+Still to do with the real machines: watch a transfer from the Acer to the ROG Ally in Transfers on the HP.
 
 ## Problems found and fixed during the run
 
