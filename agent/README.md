@@ -38,8 +38,23 @@ The Devices view opens the same hub without `role` (`api.openHub`). It gets the 
 
 Tests: `node --test "agent/*.test.js"` (the agent's logic and the collector, offline), and `desktop/scripts/live-stats-test.mjs`. The second pairs the real tool with a throwaway server, checks its reports reach the HP, and plays a second device's agent to time a report reaching the master's screen.
 
+## Send to device and the Hub Inbox (milestone 2-4, D-05 and D-07) — the parts that don't need the HP
+
+- **`inbox.js`** saves files sent to this PC into the Hub Inbox, by default `Downloads\Attic Hub Inbox`. It works however the HP ends up delivering them:
+  - Names are made safe on Windows: reserved characters, device names like `CON`, trailing dots, and very long names.
+  - A folder's path can't climb out of the inbox (`..` is dropped).
+  - An existing file is never overwritten: a clash becomes `name (2).ext`.
+  - Bytes go to `name.part` and are renamed only once complete and the right size. A broken transfer leaves nothing behind.
+- **Settings → Server → Hub Inbox** shows the folder and opens it in File Explorer. Choosing another folder is milestone 3-3 (T-07).
+- **The Send dialog** (`ui/js/views/send.js`) is described in the main README.
+
+**Waiting for the HP's transfer endpoints**, and not guessed at:
+- `api.sendToDevice` is a sample. It adds transfers to the Transfers tab and sends nothing; the dialog says so.
+- Uploading the chosen local files, and the agent's delivery hook that calls `inbox.receive()`, follow the HP's contract once it exists.
+
+Tests: `node --test "agent/*.test.js"` covers `inbox.js`.
+
 ## Still to come
 
-- **2-4 Hub Inbox:** receiving files sent from other devices.
-
-The Transfers view in `ui/` shows sample data from `ui/js/mockgen.js` until then.
+- **2-4, the delivery itself**, once the HP's transfer endpoints exist.
+- **2-5:** the Transfers view on real data. It shows sample data from `ui/js/mockgen.js` until then.

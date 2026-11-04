@@ -180,6 +180,24 @@ Tests: `live-stats-test.mjs` 17/17 (dev build and packaged), `pairing-test.mjs` 
 
 Still to do with the real machines: once the Acer is paired with the real HP, open Devices on the HP and watch the Acer's card. Then the ROG Ally, the second client from 2-3 on.
 
+## Phase 2, milestone 2-4: send to device, the Acer's half so far (4 Nov 2026)
+
+The HP's transfer endpoints don't exist yet. This is everything on the Acer's side that doesn't depend on them. The send itself is a clearly marked sample until they do.
+
+| Check | Result | How it was verified |
+| --- | --- | --- |
+| "Send a file" enabled (D-05) | ✅ (sample send) | On every device card except your own. The dialog opens with that device chosen; files or a folder from this PC, a list with sizes and remove, and a total |
+| Device picker | ✅ | Every paired device except this one, from the live list, with online or offline. Choosing an offline one changes the button to "Queue for …" (D-07) |
+| Send to device from Files | ✅ (sample send) | A file's details panel has Send to device; the dialog shows the file "On the HP" |
+| After sending | ✅ (sample) | A toast ("Sending 2 items to Acer Aspire 5", or "… will go to ROG Ally when it comes online"), and the transfers appear in Transfers with the right devices, waiting for an offline one |
+| Agent saves received files to the Hub Inbox | ✅ the saving · ⏳ delivery | `agent/inbox.js`: `Downloads\Attic Hub Inbox`, Windows-safe names, never overwrites, nothing left behind by a broken or short transfer, can't write outside the inbox. 6 unit tests. Plugging it into the HP's delivery waits for the endpoints |
+| Settings shows the Hub Inbox | ✅ | Folder path and Open folder; checked in the tool by `smoke-test.mjs` |
+| 360px | ✅ | The Send dialog fits (328px) with nothing overflowing |
+
+Tests: `node --test "agent/*.test.js"` 22/22, `smoke-test.mjs` (0 console errors, Hub Inbox path), `pairing-test.mjs` 19/19, `live-stats-test.mjs` 17/17, `discovery-test.mjs` 13/13 and `node --test "server/*.test.js"` 109/109.
+
+Waiting for the HP: the transfer endpoints (send, hold for an offline device, deliver). Then the Acer swaps `api.sendToDevice` for the real call, uploads the chosen files, connects the agent's delivery to `inbox.receive()`, and runs "A 2 GB file sent from the Acer arrives complete in the ROG Ally's Hub Inbox" and "A transfer to an offline device is delivered when it comes online".
+
 ## Problems found and fixed during the run
 
 1. **Focus after navigation:** after opening a folder or tab, keyboard focus fell back to the top of the page, so you had to Tab through the header again. It now moves into the new content.

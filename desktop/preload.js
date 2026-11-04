@@ -26,5 +26,10 @@ contextBridge.exposeInMainWorld('atticDesktop', {
   server: {
     current: () => ipcRenderer.invoke('hub:current'),
     change: () => ipcRenderer.send('hub:change')
+  },
+  // The Hub Inbox (2-4): where files sent to this PC land.
+  inbox: {
+    path: () => ipcRenderer.invoke('inbox:path'),
+    open: () => ipcRenderer.invoke('inbox:open')
   }
 });

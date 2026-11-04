@@ -588,6 +588,30 @@
       return Object.assign({}, x);
     },
 
+    // ---------- send to a device (2-4: mock until the HP's transfer endpoints exist) ----------
+    // `items`: [{ name, size, count? }], one per file or folder; `from` and `to`: devices from listHubDevices.
+    // Adds sample transfers to the Transfers tab: sending now if the device is online, waiting if not.
+    // Nothing leaves this browser. When the HP's endpoints land, this becomes the real call.
+    sendIsSample: true,
+    async sendToDevice({ items, from, to }) {
+      await delay(true);
+      const session = sessionOrThrow();
+      if (!to || (from && to.id === from.id)) throw new ApiError('INVALID', 'Choose another device to send to.');
+      if (!items || !items.length) throw new ApiError('INVALID', 'Choose at least one file.');
+      const hub = hubData();
+      const t = new Date().toISOString();
+      const made = items.map((it, i) => {
+        const x = { id: 'tr_s' + Date.now().toString(36) + i, userId: session.accountId, error: null, fileName: it.name, size: Math.max(1, it.size || 0),
+          count: it.count || 1, from: from ? from.id : null, fromName: from ? from.name : 'This device', fromKind: from ? from.kind : 'desktop',
+          to: to.id, toName: to.name, toKind: to.kind, status: to.online ? 'active' : 'queued', speed: to.online ? 24e6 : null,
+          startedAt: t, finishedAt: null, bytesDone: 0 };
+        hub.transfers.push(x);
+        return Object.assign({}, x);
+      });
+      saveHub(hub);
+      return made;
+    },
+
     // ---------- upload (real, to the HP: milestone 5) ----------
     validateUpload(file) {
       if (file.size === 0) return 'Empty file. Nothing to upload.';

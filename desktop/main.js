@@ -21,6 +21,8 @@ const CONNECT_PAGE = path.join(ROOT, 'ui', 'connect.html');
 const connect = require(path.join(ROOT, 'agent', 'connect.js'));
 const { createAgent, hubUrl } = require(path.join(ROOT, 'agent', 'hub-agent.js'));
 const { createCollector } = require(path.join(ROOT, 'agent', 'stats.js'));
+const inbox = require(path.join(ROOT, 'agent', 'inbox.js'));
+const INBOX = inbox.defaultFolder(); // where received files land (2-4); choosing another is 3-3
 let si = null;
 try { si = require('systeminformation'); } catch (e) { /* battery unknown, network guessed by name */ }
 
@@ -172,6 +174,14 @@ ipcMain.on('hub:connectTo', async (e, text) => {
 ipcMain.handle('hub:current', e => trusted(e) && server
   ? { name: server.name, address: server.address, port: server.port, serverId: server.serverId, url: connect.urlFor(server), agent: agentState } : null);
 ipcMain.on('hub:change', e => { if (trusted(e)) { server = null; startSearch({ mode: 'change' }); } });
+
+// The Hub Inbox (2-4): where it is, and opening it in File Explorer (made first if nothing has arrived yet).
+ipcMain.handle('inbox:path', e => trusted(e) ? INBOX : null);
+ipcMain.handle('inbox:open', async e => {
+  if (!trusted(e)) return 'Not allowed';
+  try { await require('fs').promises.mkdir(INBOX, { recursive: true }); } catch (err) { return err.message; }
+  return shell.openPath(INBOX); // '' when it opened
+});
 
 function createWindow() {
   Menu.setApplicationMenu(null);
