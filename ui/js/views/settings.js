@@ -60,6 +60,18 @@
           <div class="ctl"><ul class="inbox-recent" id="inbox-recent"></ul></div></div>
         <div class="set-row" data-client><div class="lbl">Use another server<small>Search the network again, or type an address. You’ll sign in on the server you pick.</small></div>
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="srv-change">${U.icon('refresh')}Change server</button></div></div>
+      </section>
+
+      <section class="card" aria-labelledby="h-pc">
+        <h2 id="h-pc">This PC</h2>
+        <div class="set-row"><div class="lbl">Start with Windows<small id="pc-start-hint">Attic Hub starts in the system tray when you sign in, so files sent to this PC arrive. Closing the window keeps it in the tray; quit from the tray icon.</small></div>
+          <div class="ctl"><label class="check"><input type="checkbox" id="pc-start"> On</label></div></div>
+        <div class="set-row" data-client><div class="lbl">Notify me when files arrive<small>A Windows notification when a file lands in the Hub Inbox. Click it to see the file.</small></div>
+          <div class="ctl"><label class="check"><input type="checkbox" id="pc-notify"> On</label></div></div>
+        <div class="set-row" data-client><div class="lbl">Files I send<small>A notification when a file you sent from this PC is delivered, or doesn’t arrive.</small></div>
+          <div class="ctl"><label class="check"><input type="checkbox" id="pc-notify-transfers"> On</label></div></div>
+        <div class="set-row" data-client><div class="lbl">Devices<small>A notification when another device has been offline for half a minute, and when it’s back.</small></div>
+          <div class="ctl"><label class="check"><input type="checkbox" id="pc-notify-devices"> On</label></div></div>
       </section>` : ''}
 
       ${master ? `
@@ -163,6 +175,27 @@
           lead: 'The tool goes back to its start screen to find or type another server. You’ll need to sign in there.' });
         if (ok) root.atticDesktop.server.change();
       };
+      // Phase 3, 3-2: this PC's own preferences, kept by the tool, not the account.
+      if (root.atticDesktop.prefs) {
+        const start = main.querySelector('#pc-start'), note = main.querySelector('#pc-notify');
+        const noteT = main.querySelector('#pc-notify-transfers'), noteD = main.querySelector('#pc-notify-devices');
+        const show = p => {
+          if (!p) return;
+          start.checked = p.startWithWindows;
+          start.disabled = !p.canStartWithWindows;
+          note.checked = p.notifyReceived;
+          noteT.checked = p.notifyTransfers;
+          noteD.checked = p.notifyDevices;
+          main.querySelector('#h-pc').dataset.loaded = '1';
+          if (p.mode === 'server') main.querySelector('#pc-start-hint').textContent = 'The server already starts with Windows as a service. This only puts Attic Hub’s window in the tray at sign-in.';
+          if (!p.canStartWithWindows) main.querySelector('#pc-start-hint').textContent += ' (The installed Attic Hub only: this is a development copy.)';
+        };
+        root.atticDesktop.prefs.get().then(show).catch(() => {});
+        start.onchange = async () => { show(await root.atticDesktop.prefs.set({ startWithWindows: start.checked })); ui.toast(start.checked ? 'Attic Hub starts with Windows' : 'Attic Hub no longer starts with Windows'); };
+        note.onchange = async () => { show(await root.atticDesktop.prefs.set({ notifyReceived: note.checked })); ui.toast(note.checked ? 'You’ll be notified when files arrive' : 'No notifications for received files'); };
+        noteT.onchange = async () => { show(await root.atticDesktop.prefs.set({ notifyTransfers: noteT.checked })); ui.toast(noteT.checked ? 'You’ll hear how files you send get on' : 'No notifications for files you send'); };
+        noteD.onchange = async () => { show(await root.atticDesktop.prefs.set({ notifyDevices: noteD.checked })); ui.toast(noteD.checked ? 'You’ll hear when devices go and come back' : 'No notifications about devices'); };
+      }
     }
 
     const dname = main.querySelector('#dname');

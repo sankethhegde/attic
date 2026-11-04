@@ -48,6 +48,7 @@ Electron's binary download is an install script, which npm may hold for approval
 | `node scripts/send-test.mjs [exe]` | The 2-4 flow end to end: sends from the tool to an offline device, and to the tool while it's open and while it's closed, checking every file arrives intact in the Hub Inbox. `BIG=1` adds a 2 GB file |
 | `node scripts/transfers-test.mjs [exe]` | The 2-5 flow end to end: live progress, a finished transfer moving to History, Cancel, Retry (automatic, and after a reload by choosing the file), filters, search, paging, and 360px |
 | `node scripts/mode-test.mjs [exe]` | The 3-1 flow: the first-launch choice, Client remembered, Server set up new (and an existing folder checked), started without installing, opened as the HP, stopped. With an exe, also runs it the way the Windows startup task does |
+| `node scripts/tray-test.mjs [exe]` | The 3-2 flow: the tray and its menu, closing to the tray, a received file's notification (one for several), the HP's events (delivered, failed, offline, online), switching them off, catching up after a restart, `--hidden`. With an exe, also switches the real start-with-Windows entry on and off |
 | `node scripts/serve-ui.js` | Serves `ui/` on localhost, to check it in a normal browser |
 
 ## First run
@@ -62,6 +63,17 @@ The first time Attic Hub opens it asks one question: **is this PC the server, or
   - Start, Stop, Restart, Remove the service, and the server's log are there too.
 
 The installed tool carries the whole server (`resources\server`) and runs it with its own built-in Node, so the HP needs nothing else installed. Windows' task starts `Attic Hub.exe ...\supervisor.js`; that run has no window.
+
+**In the tray** (3-2). Attic Hub lives in the system tray:
+- **Closing the window** keeps it running, so a client keeps reporting stats and collecting files. The first time, a notification says so.
+- **The tray menu** shows what it's doing ("Connected to …", or the server's state). It opens the window and the Hub Inbox (on the server, its controls), has switches for start-with-Windows and for each kind of notification, and quits.
+- **A client starts with Windows**, hidden in the tray, unless that's turned off in the tray or in Settings → This PC. The server already starts as a service, so its window doesn't by default.
+
+**Notifications** (3-2):
+- **File received**, from the tool itself. Several arriving together make one notification. Clicking it shows the file.
+- **From the HP's events:** a file this PC sent was delivered or didn't arrive (with the reason), and another device has gone offline or come back.
+- **While the tool was closed:** on the next start, it shows what it missed, and a long list becomes one summary. Nothing is shown twice.
+- **Switches** for each kind are in the tray and in Settings → This PC. They're per PC, kept in `prefs.json`.
 
 On a fresh server the interface shows setup for the master account, with a password you choose. The master then adds an account for each device from the Dashboard.
 

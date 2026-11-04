@@ -87,6 +87,16 @@ The same tool runs on every PC. The first launch asks which this PC is; the serv
 
 Tests: `node --test "agent/*.test.js"` (`mode.js`, and `server-control.js` without a real task). Also `desktop/scripts/mode-test.mjs`, the real tool in both modes; with the packaged exe it also starts the server exactly as the task will. Nothing installs a real task; that's for the final pass on the HP.
 
+## Tray, start-up and notifications (Phase 3, milestone 3-2, T-04 and T-05)
+
+- **`prefs.js`** holds the tool's own per-PC preferences in `prefs.json`: start with Windows (on for a client, off for the server), three notification switches (`received`, `transfers`, `devices`), and the newest HP event shown, per server.
+- **`notify.js`** decides what to show:
+  - `createNotifier()` takes each file the receiver saves. One file gets its own notification, and clicking it shows the file in File Explorer. Files landing within 2.5 s become one notification, which opens the inbox.
+  - `createEventFeed()` takes the HP's events from the agent's hub connection (`{"type":"event"}` live, `{"type":"events","last"}` on connect). It shows delivered, failed, offline and online events, if switched on. After a restart it catches up with `GET /api/events?after=<last shown>`, and more than three missed events become one summary. The HP's own "file received" event is only marked as seen, since the notifier above has already shown it with the file's location. A first connect to an HP shows nothing old.
+- **`desktop/tray.js`** is the tray icon and menu. `desktop/main.js` keeps the window alive when it's closed, starts hidden with `--hidden` (how Windows starts it), and registers start-with-Windows with `app.setLoginItemSettings`, in the installed app only.
+
+Tests: `node --test "agent/*.test.js"` (`notify.js` and `prefs.js`). Also `desktop/scripts/tray-test.mjs`, the real tool with a stand-in ROG Ally, run with `ATTIC_TEST_HOOKS=1` so the test can read the tray menu and the notifications shown.
+
 ## Still to come
 
-The rest of Phase 3, tool polish: tray, notifications for received files, start with Windows, Explorer's "Send to Attic Hub", choosing the Hub Inbox folder, and the ROG Ally's low-resource mode.
+The rest of Phase 3, tool polish: Explorer's "Send to Attic Hub", choosing the Hub Inbox folder, dragging files onto the window, the ROG Ally's low-resource mode, and updates.

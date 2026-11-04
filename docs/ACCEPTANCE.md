@@ -243,6 +243,24 @@ Found during the run:
 - **A relative supervisor path broke the task's run.** It's now made absolute first.
 - **electron-builder can't unpack files from outside `desktop/`.** The server and the interface now ship as `extraResources` instead.
 
+## Phase 3, milestone 3-2: tray, start-up and notifications, the Acer's half (5 Nov 2026)
+
+The HP's half (notification events, kept and caught up) was built and merged in pull request #17. This is the tray, start-up, and the notifications themselves, checked in the real tool against a throwaway server, with a stand-in ROG Ally.
+
+| Check | Result | How it was verified |
+| --- | --- | --- |
+| Client mode lives in the system tray (T-04) | ✅ | The tray says "Connected to …". Its menu has Open Attic Hub, Open Hub Inbox, Start with Windows, Notifications (three switches) and Quit. Closing the window hides it, and the tool keeps running; the first time, a notification says where it went |
+| Starts with Windows, can be turned off (T-04) | ✅ installed app | Switching it on and off in Settings adds and removes the real start-up entry. Started that way (`--hidden`) it begins in the tray. A development copy greys it out. The test leaves no start-up entry behind |
+| A received file triggers a Windows notification on the client (Phase 3 check, T-05) | ✅ against a local server | "File received from ROG Ally: Save backup.7z · 300 KB · in your Hub Inbox", with the window closed. Three files at once made one notification. The HP's own copy of the event isn't shown a second time |
+| Transfer done or failed (T-05) | ✅ | From the HP's events: "File delivered: Report.pdf reached ROG Ally." and "Transfer failed: … didn't arrive: Not enough space on C:." |
+| Device online or offline (T-05) | ✅ | "ROG Ally is offline" after the HP's 30 s grace, and "ROG Ally is online" when it reconnected |
+| Missed while closed | ✅ | A failure that happened while the tool was closed was shown on its next start, and nothing already shown appeared again |
+| Switches | ✅ | Turned off from the tray, files still arrived but nothing was shown. Settings → This PC shows the same switches, and a change there is kept and followed by the tray |
+
+Tests: `tray-test.mjs` 19/19 on the development build, 20/20 on the packaged app. Also `node --test "agent/*.test.js"` 37/37, `node --test "server/*.test.js"` 140/140, `mode-test.mjs` 14/14 (18/18 packaged), `smoke-test.mjs` (0 console errors), `discovery-test.mjs` 13/13, `pairing-test.mjs` 19/19, `live-stats-test.mjs` 17/17, `send-test.mjs` 19/19 and `transfers-test.mjs` 17/17.
+
+For the final pass on the real machines: the notifications on the Acer for a file from the ROG Ally, and start-with-Windows after a real sign-in.
+
 ## Problems found and fixed during the run
 
 1. **Focus after navigation:** after opening a folder or tab, keyboard focus fell back to the top of the page, so you had to Tab through the header again. It now moves into the new content.
