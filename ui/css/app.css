@@ -607,6 +607,32 @@ h1, h2, h3 { margin: 0; }
 .connect-stage { background: radial-gradient(ellipse 80% 70% at 50% 35%, #2b2a6b 0%, #15163a 55%, #0b0c1f 100%); }
 .connect-card { width: 440px; }
 .connect-card h1 { margin-top: 2px; }
+
+/* ---------- server or client, and Server mode's screen (3-1) ---------- */
+.mode-choice { align-items: flex-start; }
+.mode-choice > .ic:first-child { margin-top: 2px; }
+.mode-choice .c { line-height: 1.45; margin-top: 2px; }
+.mode-choice.on { border-color: var(--accent); background: var(--surface); box-shadow: inset 0 0 0 1px var(--accent); }
+.server-card { width: min(600px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
+.server-card h1 { margin-top: 2px; }
+.server-card .banner { margin-bottom: 14px; }
+.folder-field { display: flex; gap: 8px; align-items: flex-start; }
+.folder-field .field { flex: 1; min-width: 0; }
+.folder-field .btn { height: 52px; flex: none; }
+.server-more { margin: 12px 0; }
+.server-more summary { cursor: pointer; font-weight: 700; font-size: 13.5px; color: var(--muted); padding: 4px 0; }
+.server-more[open] summary { margin-bottom: 10px; }
+.srv-rows { display: grid; gap: 2px; margin-bottom: 16px; border-radius: var(--r-md); background: var(--field); padding: 6px 14px; }
+.srv-row { display: flex; gap: 14px; padding: 8px 0; font-size: 14px; border-bottom: 1px solid var(--line-soft); align-items: baseline; }
+.srv-row:last-child { border-bottom: 0; }
+.srv-row .k { flex: 0 0 92px; color: var(--muted); font-weight: 700; font-size: 13px; }
+.srv-row .v { flex: 1; min-width: 0; }
+.srv-row .dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; vertical-align: 1px; }
+.srv-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.srv-actions .connect-progress { flex: 1; }
+.srv-log { margin: 0 0 10px; max-height: 220px; overflow: auto; padding: 10px 12px; border-radius: 10px; background: var(--field); font-family: var(--mono); font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: var(--muted); }
+.server-foot { margin: 14px 0 0; font-size: 13.5px; color: var(--muted); text-align: center; }
+.connect-hint .ic { width: 14px; height: 14px; vertical-align: -2px; color: var(--accent); }
 .connect-progress { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); padding: 12px 14px; border-radius: var(--r-md); background: var(--field); }
 .connect-progress .spinner { color: var(--accent); flex: none; }
 .connect-checks { margin: 0 0 16px; padding-left: 20px; color: var(--muted); font-size: 13.5px; line-height: 20px; display: grid; gap: 6px; }

@@ -47,16 +47,18 @@
       ${root.atticDesktop && root.atticDesktop.server ? `
       <section class="card" aria-labelledby="h-srv">
         <h2 id="h-srv">Server</h2>
+        <div class="set-row"><div class="lbl">This PC is<small>Chosen when Attic Hub first started: the server (the HP) or a client.</small></div>
+          <div class="ctl" id="srv-role" style="gap:8px;flex-wrap:wrap;justify-content:flex-end"><span class="skel" style="display:inline-block;width:120px;height:14px"></span></div></div>
         <div class="set-row"><div class="lbl">Connected to<small>The desktop tool finds the HP on your home network by itself, and remembers it for next time.</small></div>
           <div class="ctl" id="srv-now"><span class="skel" style="display:inline-block;width:180px;height:14px"></span></div></div>
-        <div class="set-row"><div class="lbl">Live stats<small>While this PC is paired, the tool sends the HP its CPU, RAM, disk, battery and network every few seconds, for the master’s Devices view.</small></div>
+        <div class="set-row" data-client><div class="lbl">Live stats<small>While this PC is paired, the tool sends the HP its CPU, RAM, disk, battery and network every few seconds, for the master’s Devices view.</small></div>
           <div class="ctl" id="srv-agent"><span class="skel" style="display:inline-block;width:120px;height:14px"></span></div></div>
-        <div class="set-row"><div class="lbl">Hub Inbox<small>Files other devices send to this PC land here, private to you. Choosing another folder comes in a later update.</small></div>
+        <div class="set-row" data-client><div class="lbl">Hub Inbox<small>Files other devices send to this PC land here, private to you. Choosing another folder comes in a later update.</small></div>
           <div class="ctl" style="flex-wrap:wrap;justify-content:flex-end;gap:8px"><span class="mono" id="inbox-path" style="font-size:12.5px;word-break:break-all"></span>
             <button class="btn btn-secondary btn-sm" id="inbox-open">${U.icon('folder')}Open folder</button></div></div>
         <div class="set-row" id="inbox-recent-row" hidden><div class="lbl">Received<small>The latest files that arrived while the tool was open.</small></div>
           <div class="ctl"><ul class="inbox-recent" id="inbox-recent"></ul></div></div>
-        <div class="set-row"><div class="lbl">Use another server<small>Search the network again, or type an address. You’ll sign in on the server you pick.</small></div>
+        <div class="set-row" data-client><div class="lbl">Use another server<small>Search the network again, or type an address. You’ll sign in on the server you pick.</small></div>
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="srv-change">${U.icon('refresh')}Change server</button></div></div>
       </section>` : ''}
 
@@ -126,6 +128,21 @@
           replaced: 'Stopped: another copy of the tool took over', stopped: 'Off', off: 'Off: this PC isn’t paired, or it’s the HP itself' };
         const st = sv && sv.agent || 'off';
         main.querySelector('#srv-agent').innerHTML = `<span class="${st === 'reporting' ? '' : 'muted'}">${st === 'reporting' ? '<span class="dot on" style="display:inline-block;margin-right:8px"></span>' : ''}${AGENT[st] || st}</span>`;
+        // Phase 3, 3-1: this PC's role. The server has no agent, no inbox and no other server to pick;
+        // it gets its service controls instead.
+        const isServer = sv && sv.mode === 'server';
+        main.querySelectorAll('[data-client]').forEach(r => { r.hidden = isServer; });
+        const role = main.querySelector('#srv-role');
+        role.innerHTML = `<span><b>${isServer ? 'The server' : 'A client'}</b></span>
+          ${isServer ? `<button class="btn btn-secondary btn-sm" id="srv-controls">${U.icon('database')}Server controls</button>` : ''}
+          <button class="btn btn-ghost btn-sm" id="srv-role-change">Change</button>`;
+        if (isServer) role.querySelector('#srv-controls').onclick = () => root.atticDesktop.serverMode.controls();
+        role.querySelector('#srv-role-change').onclick = async () => {
+          const ok = await ui.confirm({ title: 'Change what this PC is?', confirm: 'Choose again',
+            lead: isServer ? 'Attic Hub goes back to its first question. The server keeps running as a service until you stop or remove it from Server controls; nothing is deleted.'
+              : 'Attic Hub goes back to its first question. Your pairing and files are kept.' });
+          if (ok) root.atticDesktop.mode.change();
+        };
       }).catch(() => { srvNow.innerHTML = '<span class="muted">Not known</span>'; });
       // Phase 2, 2-4: the Hub Inbox folder.
       if (root.atticDesktop.inbox) {

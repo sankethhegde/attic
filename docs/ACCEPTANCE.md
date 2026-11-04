@@ -222,6 +222,27 @@ Tests: `transfers-test.mjs` 17/17. Also `send-test.mjs` 19/19, `pairing-test.mjs
 
 Still to do with the real machines: watch a transfer from the Acer to the ROG Ally in Transfers on the HP.
 
+## Phase 3, milestone 3-1: server or client, the Acer's half (4 Nov 2026)
+
+The HP's half (the startup task and the supervisor in `server/service/`) was built and merged in pull request #15. This is the desktop tool's first-launch choice and Server mode, built on it.
+
+| Check | Result | How it was verified |
+| --- | --- | --- |
+| First launch: choose Server or Client mode (T-02) | ✅ | A fresh tool asks "what does this PC do?". Client goes on to look for the HP and isn't asked again; Settings → Server → "This PC is" can change it |
+| Server mode, set up | ✅ | A new server: `config.json` and the storage folder created (never over an existing one). An existing folder without a server is refused with the reason; the repository's folder is accepted, so the HP keeps its accounts and history |
+| Server mode, run | ✅ | "Start now" runs the server under the HP's supervisor, logging to `data\logs`; Stop stops it; closing the tool stops a server started for now |
+| Open Attic on the server | ✅ | Opens the server's own interface with no pairing (it's the HP). Its Settings show "This PC is: The server" with Server controls, and hide the client-only rows |
+| The installed tool runs the server as the task will (T-03) | ✅ in the packaged app | `Attic Hub.exe ...\supervisor.js`, exactly as the startup task runs it: no window, the server answers and serves the interface, and it stops cleanly (exit 0) on the Stop button's request. The server and interface ship as plain folders beside the app (`resources\server`, `resources\ui`) |
+| Install as a service (Administrator prompt), and Remove | ⏳ final pass on the HP | It can't be tested without a person approving Windows' prompt. The task script is the HP's own `installScript()`, and recognising the installed task as this tool's is unit-tested |
+| The HP server runs after a reboot with no one signed in (Phase 3 check) | ⏳ final pass on the HP | Install from the tool, restart the HP, don't sign in, and reach it from the Acer |
+
+Tests: `mode-test.mjs` 14/14 on the development build, 18/18 on the packaged app. Also `node --test "agent/*.test.js"` 29/29, `node --test "server/*.test.js"` 133/133, `smoke-test.mjs` (0 console errors), `discovery-test.mjs` 13/13, `pairing-test.mjs` 19/19, `live-stats-test.mjs` 17/17, `send-test.mjs` 19/19 and `transfers-test.mjs` 17/17. The earlier tests now answer the first-launch question as a client.
+
+Found during the run:
+- **The task's run crashed the app.** Making the whole Electron process act as Node let Electron's own helper processes inherit the setting, and Chromium gave up. Now only the supervisor's own child process runs as Node.
+- **A relative supervisor path broke the task's run.** It's now made absolute first.
+- **electron-builder can't unpack files from outside `desktop/`.** The server and the interface now ship as `extraResources` instead.
+
 ## Problems found and fixed during the run
 
 1. **Focus after navigation:** after opening a folder or tab, keyboard focus fell back to the top of the page, so you had to Tab through the header again. It now moves into the new content.

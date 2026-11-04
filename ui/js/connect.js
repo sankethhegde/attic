@@ -1,6 +1,7 @@
 // The desktop tool's "Looking for server" screen (Phase 2, milestone 2-1, D-01).
 // The search runs in the tool's main process (agent/connect.js); this page shows its progress and offers
-// the fallbacks: search again, pick one of several servers, or type the address.
+// the fallbacks: search again, pick one of several servers, or type the address. On the first launch
+// (Phase 3, 3-1) it asks first whether this PC is the server or a client.
 (function (root) {
   'use strict';
   const { util: U, ui } = root.Attic;
@@ -50,11 +51,26 @@
   const serverLine = s => `<span class="mono">${U.esc(s.address)}:${s.port}</span>`;
   const spinner = text => `<div class="connect-progress"><span class="spinner" aria-hidden="true"></span><span>${text}</span></div>`;
 
+  // Phase 3, 3-1 (T-02): the first launch asks what this PC is. One installer serves every PC.
+  function modeHTML(s) {
+    const card = (m, icon, title, text) => `<button type="button" class="connect-choice mode-choice${s.current === m ? ' on' : ''}" data-mode="${m}">
+      ${U.icon(icon)}<span><b>${title}</b><span class="c">${text}</span></span>${U.icon('chevronRight')}</button>`;
+    return `<h1 id="c-title">${s.changing ? 'Change what this PC is' : 'Welcome to Attic Hub'}</h1>
+      <p class="sub">${s.changing ? 'Choose again. Nothing is deleted: the server’s files and settings stay where they are.' : 'One question first: what does this PC do? You can change it later in Settings.'}</p>
+      <div class="connect-list" role="list">
+        ${card('server', 'database', 'This PC is the server', 'It keeps everyone’s files and runs Attic in the background, even when nobody is signed in. Choose this on the HP.')}
+        ${card('client', 'monitor', 'This PC connects to the server', 'It finds the HP on your home network, reports its stats, and sends and receives files. Choose this on the Acer and the ROG Ally.')}
+      </div>`;
+  }
+
   function render(s) {
     busy = s.state === 'searching' || s.state === 'checking' || s.state === 'connected';
     go.disabled = busy;
+    form.hidden = s.state === 'mode';
     let html = '';
-    if (s.state === 'searching') {
+    if (s.state === 'mode') {
+      html = modeHTML(s);
+    } else if (s.state === 'searching') {
       html = `<h1 id="c-title">${s.lost ? `Reconnecting to ${U.esc(s.lost.name)}` : 'Looking for your Attic server'}</h1>
         <p class="sub">${s.lost ? 'The connection dropped. Looking for it on your home network again.' : 'Searching your home network. This takes a few seconds.'}</p>
         ${spinner(s.step === 'remembered' && s.server ? `Trying ${U.esc(s.server.name || 'the last server')} at ${serverLine(s.server)}…` : 'Asking the network for the HP…')}`;
@@ -90,6 +106,8 @@
     const retry = stateEl.querySelector('#c-retry');
     if (retry) retry.onclick = () => { setError(''); hub.retry(); };
     stateEl.querySelectorAll('[data-id]').forEach(b => b.onclick = () => hub.choose(b.dataset.id));
+    stateEl.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => root.atticDesktop.mode.choose(b.dataset.mode));
+    if (s.state === 'mode') { const first = stateEl.querySelector('[data-mode]'); if (first) first.focus(); }
     if (s.address && !addr.value) addr.value = s.address;
   }
 

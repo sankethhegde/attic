@@ -70,6 +70,23 @@ Tests:
 
 The agent needs nothing new for 2-5. Retry on the HP re-announces a queued transfer exactly like a new one, and `receiver.js` collects it as before. The Transfers view in `ui/` does the rest, as described in the main README.
 
+## Server or client (Phase 3, milestone 3-1, T-02 and T-03)
+
+The same tool runs on every PC. The first launch asks which this PC is; the server's side runs the HP's service (`server/service/`) from the tool.
+
+- **`mode.js`** keeps the answer in `mode.json` in the tool's user-data folder. For the server it also checks or creates the server's folder:
+  - `createServer()` writes a new `config.json` (one share per chosen folder, pairing and discovery on) and never overwrites an existing one.
+  - `checkExisting()` accepts a folder with a usable `config.json`, including the repository's top folder.
+- **`server-control.js`** drives the Windows startup task "Attic Hub Server":
+  - `status()` reads whether the task is installed and points at this tool, whether the supervisor is running (`data\supervisor.json`), and whether the server answers.
+  - `install()` and `remove()` run the HP's `installScript()` or `Unregister-ScheduledTask` in an elevated PowerShell, through Windows' permission prompt.
+  - `start()`, `stop()` (the supervisor's stop file first, then the task), `restart()` and `logs()`.
+  - `startNow()` runs the supervisor as a child of the tool, with nothing installed.
+  - PowerShell runs asynchronously, so the window never freezes.
+- **`desktop/main.js`** launched as `Attic Hub.exe <...>\supervisor.js` (which is what the task does) starts no window. It runs the supervisor as a Node-mode child of itself, pointed at the chosen folder, and exits when the supervisor does. Only the child gets `ELECTRON_RUN_AS_NODE`: Electron's own helper processes can't run with it.
+
+Tests: `node --test "agent/*.test.js"` (`mode.js`, and `server-control.js` without a real task). Also `desktop/scripts/mode-test.mjs`, the real tool in both modes; with the packaged exe it also starts the server exactly as the task will. Nothing installs a real task; that's for the final pass on the HP.
+
 ## Still to come
 
-Phase 3, tool polish: tray, notifications for received files, start with Windows, Explorer's "Send to Attic Hub", choosing the Hub Inbox folder, and the ROG Ally's low-resource mode.
+The rest of Phase 3, tool polish: tray, notifications for received files, start with Windows, Explorer's "Send to Attic Hub", choosing the Hub Inbox folder, and the ROG Ally's low-resource mode.
