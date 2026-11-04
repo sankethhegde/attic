@@ -15,6 +15,7 @@ const { createHub } = require('./hub');
 const { createSelfStats } = require('./self-stats');
 const { createTransfers, publicTransfer } = require('./transfers');
 const { openDb } = require('./db');
+const { createEvents } = require('./events');
 
 const UI_ROOT = path.resolve(__dirname, '..', 'ui');
 // Overridable so the tests can run a server on a throwaway config and data folder.
@@ -235,6 +236,20 @@ hub.setDescriber((id, who) => { const d = allDevices().find(x => x.id === id); r
 // and the progress of a moving transfer about twice a second, is pushed to the viewers who may see it
 // (the master, the sender, anyone on the receiving device); a new or cancelled one to the receiving agent.
 const db = openDb(DATA_DIR);
+
+// ---------- notification events (Phase 3, 3-2) ----------
+// What a client turns into a Windows notification: a file received, a transfer delivered or failed, a
+// device online or offline. Pushed to the agents and viewers each is for as {"type":"event"}, and kept
+// so a client that was away can ask for what it missed (GET /api/events?after=).
+const events = createEvents({ db, deliver: (ev, to) => {
+  const msg = { type: 'event', event: ev };
+  if (to.allDevices) hub.toAgents(to.notDevice, msg); else for (const d of to.devices) hub.toAgent(d, msg);
+  hub.toViewers(v => to.forAccount(v.accountId) || to.forDevice(v.deviceId), msg);
+} });
+hub.setPresenceHook((id, online) => events.presence(pairing.list().find(d => d.id === id), online));
+setInterval(() => events.prune(), 3600e3).unref();
+events.prune();
+
 const transfers = createTransfers({ db, dataDir: DATA_DIR, spoolDir: path.resolve(CONFIG.raw.transferSpool || path.join(DATA_DIR, 'transfers')),
   log: m => console.log('  ' + m), onChange: t => announceTransfer(t), onProgress: (t, p) => announceProgress(t, p) });
 const mayWatch = t => v => v.master || v.accountId === t.userId || v.deviceId === t.to;
@@ -243,12 +258,17 @@ function announceTransfer(t) {
   if (t.status === 'queued') hub.toAgent(t.to, { type: 'transfer', transfer: pub });
   if (t.status === 'cancelled') hub.toAgent(t.to, { type: 'transfer-cancelled', id: t.id });
   hub.toViewers(mayWatch(t), { type: 'transfer', transfer: pub });
+  events.transfer(t);
 }
 function announceProgress(t, p) {
   hub.toViewers(mayWatch(t), { type: 'progress', id: t.id, stage: p.stage, bytesDone: p.bytesDone, size: t.size, speed: p.speed });
 }
 // A device coming online gets everything waiting for it: the offline queue (D-07).
-hub.setAgentHook((deviceId, send) => send({ type: 'inbox', transfers: transfers.pendingFor(deviceId).map(publicTransfer) }));
+// It's also told the newest event number, so it can fetch any notifications it missed while away.
+hub.setAgentHook((deviceId, send) => {
+  send({ type: 'inbox', transfers: transfers.pendingFor(deviceId).map(publicTransfer) });
+  send({ type: 'events', last: events.lastSeq() });
+});
 setInterval(() => transfers.sweep(), 3600e3).unref();
 transfers.sweep();
 // The receiving end is a device, not an account: its agent calls with the device token alone.
@@ -469,6 +489,7 @@ async function handleApi(req, res, url, query) {
     auth.dropDeviceSessions(d.id);
     hub.deviceRemoved(d.id);
     transfers.dropDevice(d.id);
+    events.forget(d.id);
     hub.recheck();
     console.log(`  Unpaired: ${d.name} (${d.id})`);
     return sendJSON(res, 200, { ok: true, device: { id: d.id, name: d.name } });
@@ -505,6 +526,17 @@ async function handleApi(req, res, url, query) {
       { limit: query.get('limit') || 50, before: query.get('before'), device: query.get('device'), q: query.get('q'), status: query.get('status') });
     return sendJSON(res, 200, { items: r.items.map(publicTransfer), next: r.next });
   }
+  // Notification events (3-2) for this device and, when signed in, this account. ?after=<seq> gives what
+  // came after that one, oldest first (&limit=, default 100); without it, just the newest number, for a
+  // client starting out. An agent asks with its device token alone.
+  if (url === '/api/events' && m === 'GET') {
+    const who = auth.resolve(readCookie(req, COOKIE), deviceIdOf(req));
+    const audience = { deviceId: deviceIdOf(req), accountId: who ? who.session.accountId : null };
+    if (!audience.deviceId && !audience.accountId) throw SIGNED_OUT();
+    if (!query.has('after')) return sendJSON(res, 200, { events: [], last: events.lastSeq(), more: false });
+    return sendJSON(res, 200, events.since(audience, query.get('after'), query.get('limit') || 100));
+  }
+
   // What is waiting for this device (its agent, or its interface).
   if (url === '/api/inbox' && m === 'GET') return sendJSON(res, 200, transfers.pendingFor(requireReceiver(req)).map(publicTransfer));
   const tr = /^\/api\/transfers\/([A-Za-z0-9_-]{1,64})(\/file|\/received|\/failed|\/retry)?$/.exec(url);

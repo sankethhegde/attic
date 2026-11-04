@@ -58,6 +58,7 @@ function createHub(dataDir, { log = () => {} } = {}) {
   const conns = new Set(); // { conn, role, deviceId, master, check, lastReport, recent }
   let describe = () => null; // (deviceId, { master, viewerDeviceId }) -> the device as the Devices view shows it
   let onAgent = () => {};    // (deviceId, send) when an agent connects: 2-4 sends what's waiting for it
+  let onPresence = () => {}; // (deviceId, online) when a device's agent comes or goes: 3-2 notifications
 
   const agentOnline = id => [...conns].some(c => c.role === 'agent' && c.deviceId === id);
   const anyOnline = id => [...conns].some(c => c.deviceId === id);
@@ -75,9 +76,12 @@ function createHub(dataDir, { log = () => {} } = {}) {
   function add(conn, entry) {
     const c = Object.assign({ conn, lastReport: 0, recent: [] }, entry);
     const wasOnline = anyOnline(c.deviceId);
+    const hadAgent = agentOnline(c.deviceId);
     conns.add(c);
+    if (c.role === 'agent' && !hadAgent) onPresence(c.deviceId, true);
     conn.on('close', () => {
       conns.delete(c);
+      if (c.role === 'agent' && !agentOnline(c.deviceId)) onPresence(c.deviceId, false);
       if (c.role === 'agent' && latest[c.deviceId]) save();
       if (!anyOnline(c.deviceId) || (c.role === 'agent' && !agentOnline(c.deviceId))) changed(c.deviceId, true);
     });
@@ -120,6 +124,7 @@ function createHub(dataDir, { log = () => {} } = {}) {
     STATS_INTERVAL_MS,
     setDescriber(fn) { describe = fn; },
     setAgentHook(fn) { onAgent = fn; },
+    setPresenceHook(fn) { onPresence = fn; },
 
     addAgent(conn, deviceId, check) {
       // One agent per device: a new one (the tool restarted) replaces the old.
@@ -140,6 +145,10 @@ function createHub(dataDir, { log = () => {} } = {}) {
       const list = [...conns].filter(c => c.role === 'agent' && c.deviceId === deviceId);
       for (const c of list) c.conn.send(msg);
       return list.length > 0;
+    },
+    // To every agent but `exceptDeviceId`'s (3-2: a device coming or going is news to the others).
+    toAgents(exceptDeviceId, msg) {
+      for (const c of conns) if (c.role === 'agent' && c.deviceId !== exceptDeviceId) c.conn.send(msg);
     },
     // To the viewers `who({ master, accountId, deviceId })` picks.
     toViewers(who, msg) {

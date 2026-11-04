@@ -6,7 +6,9 @@ The server that runs on the HP laptop. Built one milestone at a time from `docs/
 
 **Phase 2 on the server:** discovery (2-1) answers clients looking for the HP on the home network, pairing (2-2) lets only devices the master approved use it, the live hub (2-3) carries each device's stats to the master as they change, and transfers (2-4) send a file to another device through the HP, holding it while that device is offline. Transfers report live progress, can be retried, and are kept as history in a database (2-5).
 
-**Phase 3 on the server:** the HP server runs as a background service that starts with Windows, before anyone signs in, and comes back after a crash (3-1). See [Run it as a service](#run-it-as-a-service-phase-3-milestone-3-1-t-03).
+**Phase 3 on the server:**
+- **3-1:** the HP server runs as a background service that starts with Windows, before anyone signs in, and comes back after a crash. See [Run it as a service](#run-it-as-a-service-phase-3-milestone-3-1-t-03).
+- **3-2:** it sends each client the events it should turn into Windows notifications. See [Notification events](#notification-events-phase-3-milestone-3-2-t-05).
 
 ## Run it
 
@@ -336,6 +338,45 @@ This is the HP's half of 2-5. Its other half, the Transfers view on real data, i
 - paging and every filter, including a `%` in the search;
 - names kept after unpairing, and history across a restart;
 - bringing in `transfers.json`.
+
+## Notification events (Phase 3, milestone 3-2, T-05)
+
+The HP tells each client what to notify about; the client shows the Windows notification. This is the HP's half of 3-2; the tray, start-up and the notifications themselves are the Acer's half. `events.js` does it.
+
+| `kind` | When | Who hears it | Example `title` / `body` |
+| --- | --- | --- | --- |
+| `transfer.received` | A file reached a device's Hub Inbox | The receiving device | File received / Trip to Coorg.zip from Acer Aspire 5 is in your Hub Inbox. |
+| `transfer.done` | A file you sent was delivered | The sender's device and account | File delivered / Trip to Coorg.zip reached ASUS ROG Ally. |
+| `transfer.failed` | A file you sent didn't arrive | The sender's device and account | Transfer failed / Save backup.7z to ASUS ROG Ally didn't arrive: Not enough space on C:. |
+| `device.offline` | A device's agent has been gone 30 s | Every other device, every account | ASUS ROG Ally is offline |
+| `device.online` | A device announced offline is back | Every other device, every account | ASUS ROG Ally is online |
+
+A cancelled transfer makes no notification: the person who cancelled it knows.
+
+**Delivery.** Each event goes out at once over the hub as `{"type":"event","event":{seq,at,kind,title,body,deviceId,transferId}}`:
+- **to agents** (`?role=agent`), for the device events;
+- **to interfaces**, whether open on that device or signed in as that account.
+
+`title` and `body` are ready to show. `seq` always rises, and is the same event however it arrives, so a client showing both its agent's and its interface's copy can drop duplicates.
+
+**Catching up.** Events are kept in the database (`events` table in `data/attic.db`) for 7 days, up to 1,000. When an agent connects, its messages after `hello` include `{"type":"events","last":<newest seq>}`. A client that saved the last `seq` it showed then asks `GET /api/events?after=<seq>` for what it missed, oldest first. The response is `{ events, last, more }`, with `&limit=` (default 100, at most 500). Without `after`, it gives just `last`, for a client starting out. An agent asks with its device token; an interface with its session, which adds the account's events.
+
+**Quiet by design:**
+- **Going offline:** announced only after 30 s away, so a tool restart or a moment's Wi-Fi drop says nothing.
+- **Coming online:** announced only for a device whose going was.
+- **HP restarts:** after one, every agent reconnecting causes no notifications.
+- **Your own device:** it never hears about itself.
+- **Unpairing** a device forgets any pending announcement about it.
+
+`events.test.js` covers:
+- who hears each kind, and who doesn't;
+- the failure reason;
+- no notification on cancel;
+- offline after the grace period, then online;
+- a quick reconnect and an HP restart staying quiet;
+- catching up, paging and filtering to the caller;
+- events surviving a restart;
+- the 7-day limit.
 
 ## Rules that carry over
 
