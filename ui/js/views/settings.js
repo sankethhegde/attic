@@ -3,9 +3,10 @@
   'use strict';
   const { util: U, api, ui, background } = root.Attic;
 
-  const VERSION = '0.2.0 · Phase 1B';
+  // The interface's version: the desktop tool's when it runs there; the HP serves the same files.
+  const VERSION = '0.11.0';
   const HUB_REQUIREMENTS_URL = 'https://claude.ai/artifact/PAvQYsCeT2cKm1oApbtzJv';
-  const REQUIREMENTS_URL = 'https://claude.ai/artifact/VryAcjg2CZieJSu6gUu3tJ';
+  const GUIDE_URL = 'https://claude.ai/artifact/1AXNgGjN22Pcmm2HtCqa3p';
 
   function seg(name, options, current, label) {
     return `<div class="seg" role="group" aria-label="${label}">${options.map(([v, l]) => `<button data-${name}="${v}" aria-pressed="${current === v}">${l}</button>`).join('')}</div>`;
@@ -112,8 +113,6 @@
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="export">${U.icon('download')}Export JSON</button></div></div>
         <div class="set-row"><div class="lbl">Import settings<small>Replaces this browser’s preferences with the file’s. Shares aren’t imported: add them above.</small></div>
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="import">${U.icon('upload')}Import JSON</button><input type="file" id="import-file" accept="application/json,.json" hidden></div></div>
-        <div class="set-row"><div class="lbl">Simulate failures<small>Makes 10% of Devices and Transfers requests fail, to test error states. Those two views stay on sample data until Phase 2.</small></div>
-          <div class="ctl"><label class="check"><input type="checkbox" id="fail" ${s.dev.failRate ? 'checked' : ''}> On</label></div></div>
         <div class="set-row desktop-only"><div class="lbl">Publish an update<small>Send a new Attic Hub installer (Attic-Hub-Setup-&lt;version&gt;.exe, from <span class="mono">npm run dist</span>) to the HP. Every device then downloads it from the HP and offers to restart into it, with no internet needed.</small></div>
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="upd-publish">${U.icon('upload')}Choose installer</button><input type="file" id="upd-file" accept=".exe" hidden></div></div>
         <div class="set-row" id="upd-kept-row" hidden><div class="lbl">On the HP<small>The newest three are kept.</small></div>
@@ -129,9 +128,9 @@
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="upd-check">${U.icon('refresh')}Check now</button><button class="btn btn-primary btn-sm" id="upd-install" hidden>Restart to update</button></div></div>` : ''}
         <div class="set-row"><div class="lbl">Running in</div><div class="ctl">${root.atticDesktop ? `Attic Hub desktop tool${root.atticDesktop.version ? ` <span class="mono">${U.esc(root.atticDesktop.version)}</span>` : ''}` : 'A web browser'}</div></div>
         <div class="set-row" style="display:block"><div class="banner banner-info" style="margin:0">${U.icon('info')}<span>Files, shares, accounts, devices and transfers are real and live on the HP. <span id="ix-lead">This connection isn’t encrypted, so use Attic on your home Wi-Fi only.</span> <span id="ix"></span></span></div></div>
-        <div class="set-row"><div class="lbl">Requirements</div><div class="ctl" style="flex-direction:column;align-items:flex-end;gap:4px">
-          <a href="${HUB_REQUIREMENTS_URL}" target="_blank" rel="noopener">Attic Hub requirements ${U.icon('chevronRight').replace('class="ic"', 'class="ic" style="width:14px;height:14px;vertical-align:-2px"')}</a>
-          <a href="${REQUIREMENTS_URL}" target="_blank" rel="noopener">Phase 1A requirements ${U.icon('chevronRight').replace('class="ic"', 'class="ic" style="width:14px;height:14px;vertical-align:-2px"')}</a></div></div>
+        <div class="set-row"><div class="lbl">Help</div><div class="ctl" style="flex-direction:column;align-items:flex-end;gap:4px">
+          <a href="${GUIDE_URL}" target="_blank" rel="noopener">User guide ${U.icon('chevronRight').replace('class="ic"', 'class="ic" style="width:14px;height:14px;vertical-align:-2px"')}</a>
+          <a href="${HUB_REQUIREMENTS_URL}" target="_blank" rel="noopener">Attic Hub requirements ${U.icon('chevronRight').replace('class="ic"', 'class="ic" style="width:14px;height:14px;vertical-align:-2px"')}</a></div></div>
       </section>
     </div></div>`;
 
@@ -360,7 +359,6 @@
       };
       drawShares();
       main.querySelector('#add-share').onclick = () => shareDialog(null, drawShares);
-      main.querySelector('#fail').onchange = e => save({ dev: { failRate: e.target.checked ? 0.1 : 0 } }, e.target.checked ? 'Failures on: 10% of requests will fail' : 'Failures off');
       main.querySelector('#export').onclick = async () => {
         const data = await api.exportSettings();
         const a = document.createElement('a');
@@ -391,7 +389,7 @@
         const ok = await ui.confirm({
           title: 'Clear all local data?', danger: true, confirm: 'Clear everything',
           lead: 'Everything Attic keeps in this browser will be deleted:',
-          body: `<ul><li>Your session — you’ll be signed out</li><li>Theme, view and background settings</li><li>All custom background images you added</li><li>The sample Devices and Transfers data (it’s regenerated identically)</li></ul>
+          body: `<ul><li>Your session — you’ll be signed out</li><li>Theme, view and background settings</li><li>All custom background images you added</li></ul>
             <p class="muted" style="font-size:13px;margin:8px 0 0">Accounts, shares and files are kept on the server and aren’t affected. This can’t be undone.</p>`
         });
         if (!ok) return;
@@ -467,7 +465,7 @@
     ui.dialog({
       title: 'Change password',
       body: `<div class="form-grid">${f('cp-cur', 'Current password')}${f('cp-new', 'New password')}${f('cp-new2', 'Confirm new password')}</div>
-        <p class="mock-note" style="margin-top:4px">${U.icon('info')}<span>At least 6 characters. Your other signed-in devices are signed out when it changes.</span></p>`,
+        <p class="form-note" style="margin-top:4px">${U.icon('info')}<span>At least 6 characters. Your other signed-in devices are signed out when it changes.</span></p>`,
       actions: [{ label: 'Cancel' }, { label: 'Change password', kind: 'primary', onClick: async (close, dlg) => {
         const v = id => dlg.querySelector('#' + id).value;
         const set = (id, m) => dlg.querySelector(`#${id}-msg`).textContent = m;

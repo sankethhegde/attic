@@ -2,7 +2,9 @@
 
 Attic Hub is one installable Windows desktop tool. It stores your files on the HP home server and connects your home devices (the HP, the Acer, the ROG Ally and the iPhone) over the home network. It grew out of Attic, the home file server interface built in Phase 1A.
 
-**Status: Phase 2, the Devices module, built.** Files, shares, accounts and ownership live on the HP (Phase 1C): the server in `server/` serves the interface on the home network, checks every password, and decides who sees which file. Devices find the HP, pair with it, report live stats, and send files to each other through it, with progress and history (Phase 2). Nothing in the interface is sample data any more. The connection isn't encrypted yet (HTTPS is a later step), so use Attic on the home Wi-Fi only.
+**Status: 0.11.0, Phases 1 to 4 built.** Files, shares, accounts and ownership live on the HP (Phase 1C): the server in `server/` serves the interface on the home network, checks every password, and decides who sees which file. Devices find the HP, pair with it, report live stats, and send files to each other through it, with progress and history (Phase 2). The tool lives in the tray, has notifications, File Explorer's "Send to Attic Hub", the ROG Ally's low-resource mode and updates from the HP (Phase 3). The iPhone uses it in Safari over HTTPS, as a Home Screen app, with camera-roll uploads that survive a dropped connection (Phase 4). Nothing in the interface is sample or test data.
+
+**How to use it:** the [Attic Hub user guide](https://claude.ai/artifact/1AXNgGjN22Pcmm2HtCqa3p) covers installing on the HP, the PCs and the iPhone, every feature, and troubleshooting. Settings → About links to it too.
 
 ## Layout
 
@@ -108,6 +110,7 @@ The iPhone uses the same interface in Safari, served by the HP (4-1):
   - Content kept clear of the notch and the home indicator.
   - Toasts sit above the tab bar.
   - Checked at 390 and 320 px.
+- **Camera roll and big videos (4-2).** On the iPhone, Upload (in Files) and Send a file offer Photo Library, Take Photo or Video, and Choose File. Any file over 16 MB, on any device, goes up in 8 MB pieces through the HP's resumable uploads (`api.js`, `resumableUpload`). When the Wi-Fi drops or the screen locks, it shows "Waiting…", then carries on from where the HP got to. The screen is kept awake while it sends, where Safari allows it.
 - **Not on a phone:** Choose a folder, Drag files here, and Publish an update are hidden (`ui.handheld`, class `desktop-only`). Settings → This iPhone says what else differs: files wait until Attic is opened, there are no notifications while it's closed, and the phone doesn't report its own stats.
 
 On a fresh server the interface shows setup for the master account, with a password you choose. The master then adds an account for each device from the Dashboard.

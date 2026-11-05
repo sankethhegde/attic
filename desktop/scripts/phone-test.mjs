@@ -12,6 +12,7 @@ import https from 'node:https';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -254,6 +255,59 @@ try {
     `${JSON.stringify(sendBtns)} ${dash} publish visible ${publish}`);
   const toast = await ev(`Attic.ui.toast('A toast'); await new Promise(r => setTimeout(r, 400)); const t = document.querySelector('.toast').getBoundingClientRect(), b = document.querySelector('.tabs').getBoundingClientRect(); return { toast: Math.round(t.bottom), tabs: Math.round(b.top) }`);
   check('toasts sit above the tab bar', toast.toast <= toast.tabs, JSON.stringify(toast));
+
+  // 5. 4-2: a big "video" from the camera roll, uploaded and sent in pieces over a slow Wi-Fi that drops.
+  const video = path.join(tmp, 'IMG_0420.MOV'), clip = path.join(tmp, 'IMG_0421.MOV');
+  fs.writeFileSync(video, crypto.randomBytes(40 * 1024 * 1024));
+  fs.writeFileSync(clip, crypto.randomBytes(24 * 1024 * 1024));
+  const sha = b => crypto.createHash('sha256').update(b).digest('hex');
+  const slow = () => send('Network.emulateNetworkConditions', { offline: false, latency: 5, downloadThroughput: 20e6, uploadThroughput: 6e6 });
+  const drop = async ms => { await send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 }); await sleep(ms); await slow(); };
+  const setFiles = async (selector, files) => {
+    await send('DOM.enable');
+    const doc = await send('DOM.getDocument', { depth: -1 });
+    const n = await send('DOM.querySelector', { nodeId: doc.result.root.nodeId, selector });
+    return send('DOM.setFileInputFiles', { nodeId: n.result.nodeId, files });
+  };
+  await go('#/files/main/Videos');
+  await waitFor(`document.querySelector('#fupload')`);
+  await slow();
+  await setFiles('#fpick', [video]);
+  await waitFor(`/\\d+%/.test(document.querySelector('#fupload').textContent) && parseInt(document.querySelector('#fupload').textContent) >= 15`, 20000);
+  const dropAt = await ev(`return document.querySelector('#fupload').textContent`);
+  const dropping = drop(4000);
+  const waiting = await waitFor(`document.querySelector('#fupload').textContent === 'Waiting…' && 'Waiting…'`, 6000);
+  await dropping;
+  const landed = path.join(share, 'Videos', 'IMG_0420.MOV');
+  const upOk = await (async () => { for (let i = 0; i < 120; i++) { if (fs.existsSync(landed) && fs.statSync(landed).size === 40 * 1024 * 1024) return true; await sleep(500); } return false; })();
+  check('a 40 MB video from the camera roll goes up in pieces; the Wi-Fi dropping part-way only pauses it', upOk && waiting && sha(fs.readFileSync(landed)) === sha(fs.readFileSync(video)),
+    `dropped at ${dropAt}, showed “${waiting}”, landed whole: ${upOk}`);
+  await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  const leftovers = fs.readdirSync(path.join(share, 'Videos')).filter(f => f.startsWith('~attic-'));
+  check('nothing half-sent is left in the folder', !leftovers.length, leftovers.join(', '));
+
+  // Sending from the phone to the ROG Ally, also through a drop.
+  await go('#/devices');
+  await ev(`[...document.querySelectorAll('.card, .dev-card, li, article')].find(c => /ROG Ally/.test(c.textContent) && [...c.querySelectorAll('button')].some(b => /Send a file/.test(b.textContent)))
+    .querySelectorAll('button').forEach(b => { if (/Send a file/.test(b.textContent)) b.click(); }); return 1`);
+  await waitFor(`document.querySelector('#sd-in-files')`, 5000);
+  const pickLabel = await ev(`return document.querySelector('#sd-files').textContent.trim()`);
+  await setFiles('#sd-in-files', [clip]);
+  await waitFor(`document.querySelector('.send-items li')`);
+  await ev(`const d = [...document.querySelectorAll('.send-dev')].find(b => /ROG Ally/.test(b.textContent)); if (!d.classList.contains('on')) d.click(); return 1`);
+  await slow();
+  await ev(`document.querySelector('.dialog-actions [data-i="1"]').click(); return 1`);
+  await waitFor(`(() => { const m = document.querySelector('#sd-progress .meter'); return m && +m.getAttribute('aria-valuenow') >= 15; })()`, 20000);
+  const sDrop = drop(4000);
+  const sWait = await waitFor(`(() => { const t = document.querySelector('#sd-progress'); return t && /Waiting for the connection/.test(t.textContent) && t.textContent.trim().slice(0, 60); })()`, 6000);
+  await sDrop;
+  const queued = await (async () => { for (let i = 0; i < 120; i++) { const t = ((await call('hp', 'GET', '/api/transfers?limit=50')).body || []).find(x => x.fileName === 'IMG_0421.MOV' && x.status === 'queued'); if (t) return t; await sleep(500); } return null; })();
+  await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  let got = null;
+  if (queued) got = await new Promise((resolve, reject) => http.get({ host: LAN, localAddress: LAN, port: HTTP_PORT, path: `/api/transfers/${queued.id}/file`, headers: { 'X-Attic-Device': jars.ally.attic_device } },
+    res => { const c = []; res.on('data', d => c.push(d)); res.on('end', () => resolve(Buffer.concat(c))); }).on('error', reject));
+  check('sending a video to the ROG Ally from the phone: picked as photos or files, paused by the drop, then delivered whole',
+    pickLabel === 'Choose photos or files' && sWait && got && sha(got) === sha(fs.readFileSync(clip)), `“${pickLabel}”; “${sWait}”; ${got ? got.length + ' bytes, intact ' + (sha(got) === sha(fs.readFileSync(clip))) : 'not queued'}`);
   const all = Object.entries(measured);
   const wide = all.filter(([, m]) => m.scrollW > m.W + 1 || m.over.length);
   check('no view or dialog is wider than the screen, at 390 px or 320 px', !wide.length, wide.map(([k, m]) => `${k}: ${m.scrollW}/${m.W} ${m.over.slice(0, 2).join(' ')}`).join(' ; ') || `${all.length} screens`);

@@ -202,8 +202,8 @@ h1, h2, h3 { margin: 0; }
 .login-card.master { --accent: var(--master); --accent-hover: var(--master-hover); --focus-ring: color-mix(in srgb, var(--master) 30%, transparent); }
 .login-card.master .mode-badge { display: inline-flex; }
 .login-card.master { border-color: color-mix(in srgb, var(--master) 45%, transparent); }
-.mock-note { margin-top: 16px; font-size: 12px; line-height: 17px; color: var(--muted); display: flex; gap: 6px; }
-.mock-note .ic { width: 15px; height: 15px; margin-top: 1px; flex: none; }
+.form-note { margin-top: 16px; font-size: 12px; line-height: 17px; color: var(--muted); display: flex; gap: 6px; }
+.form-note .ic { width: 15px; height: 15px; margin-top: 1px; flex: none; }
 .test-accts { margin-top: 12px; border: 1.5px dashed var(--line); border-radius: var(--r-md); font-size: 13px; }
 .test-accts summary { display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer; font-weight: 700; list-style: none; border-radius: var(--r-md); }
 .test-accts summary::-webkit-details-marker { display: none; }

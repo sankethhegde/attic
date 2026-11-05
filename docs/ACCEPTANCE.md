@@ -354,6 +354,23 @@ For the final pass on the real iPhone:
 - open the secure address, and add Attic to the Home Screen;
 - check the notch and home indicator in portrait and landscape, and the light and dark themes.
 
+## Phase 4, milestone 4-2: camera-roll upload and send, the Acer's half (5 Nov 2026)
+
+The HP's half (no time limit on long uploads, resumable uploads) was done in pull request #24. Checked in the same emulated iPhone as 4-1, over HTTPS, with the connection slowed to 6 MB/s and then cut for 4 seconds part-way.
+
+| Check | Result | How it was verified |
+| --- | --- | --- |
+| Upload a video from the camera roll | ✅ | A 40 MB "IMG_0420.MOV" chosen in Files → Upload went up in 8 MB pieces. Cut off at 15%, the button said "Waiting…", then it carried on by itself and landed byte for byte, with no half-sent file left in the folder |
+| Send a video to a device from the phone | ✅ | Devices → Send a file offers "Choose photos or files". A 24 MB clip sent to the ROG Ally showed "Waiting for the connection… carries on by itself" during the cut, then was queued and delivered intact |
+| Big files from the PCs too | ✅ | `send-test.mjs` with `BIG=1`: a 2 GB file sent from the desktop tool now goes in pieces, up in 10 s and delivered intact at 192 MB/s |
+| The screen stays on while sending | ✅ in part | Screen Wake Lock is requested while pieces go up. Whether Safari grants it needs the real iPhone |
+
+Also removed: the last test leftovers in the product. These were the made-up 100–300 ms delays on settings, the "Simulate failures" switch, "sample data" wording, "arrives in Phase 2/4" notes, a disabled Delete button, and a "0.2.0 · Phase 1B" version label.
+
+Tests: `phone-test.mjs` 17/17. Also `node --test "agent/*.test.js"` 52/52, `node --test "server/*.test.js"` 165/165, and every desktop suite: `smoke-test.mjs` (0 console errors), `tray-test.mjs` 19/19, `mode-test.mjs` 14/14, `discovery-test.mjs` 13/13, `pairing-test.mjs` 19/19, `live-stats-test.mjs` 17/17, `send-test.mjs` 20/20 (with `BIG=1`), `transfers-test.mjs` 17/17, `shortcuts-test.mjs` 12/12, `low-resource-test.mjs` 16/16, `update-test.mjs` 12/12. Packaged app: smoke, low-resource, shortcuts and update tests pass. Installer: `Attic-Hub-Setup-0.11.0.exe`, 112 MB.
+
+For the final pass on the real iPhone: upload a real 4K video from the camera roll, and lock the screen part-way. Also check whether Safari's picker sends the original, or a smaller or converted copy (HEIC to JPEG, a compressed video). If it converts, note which picker setting keeps the original, for the user guide.
+
 ## Problems found and fixed during the run
 
 1. **Focus after navigation:** after opening a folder or tab, keyboard focus fell back to the top of the page, so you had to Tab through the header again. It now moves into the new content.
