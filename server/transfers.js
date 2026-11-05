@@ -50,8 +50,9 @@ function createTransfers({ db, dataDir, spoolDir, log = () => {}, onChange = () 
   fs.mkdirSync(spoolDir, { recursive: true });
   const fileOf = id => path.join(spoolDir, id + '.bin');
   const partOf = id => path.join(spoolDir, id + '.part');
+  const chunkedOf = id => path.join(spoolDir, id + '.chunked'); // a resumable upload's bytes (4-2)
   const now = () => new Date().toISOString();
-  const removeFile = id => { for (const p of [fileOf(id), partOf(id)]) fs.promises.unlink(p).catch(() => {}); };
+  const removeFile = id => { for (const p of [fileOf(id), partOf(id), chunkedOf(id)]) fs.promises.unlink(p).catch(() => {}); };
 
   const q = {
     get: db.prepare('SELECT * FROM transfers WHERE id = ?'),
@@ -85,12 +86,17 @@ function createTransfers({ db, dataDir, spoolDir, log = () => {}, onChange = () 
   }
 
   // ---------- after a restart ----------
-  // An upload that was in flight is lost; a delivery in flight goes back to waiting. Spool files with no
-  // open transfer (a crash between steps) are deleted; a failed delivery's copy is kept for Retry.
-  db.prepare("UPDATE transfers SET status = 'failed', finished_at = ?, error = 'The HP restarted during the upload. Retry to send it again.' WHERE status = 'active' AND stage = 'upload'").run(now());
+  // A one-request upload that was in flight is lost; a resumable one (4-2) carries on where it was. A
+  // delivery in flight goes back to waiting. Spool files with no open transfer (a crash between steps)
+  // are deleted; a failed delivery's copy is kept for Retry.
+  const resumable = new Set(db.prepare("SELECT id FROM transfers WHERE status = 'active' AND stage = 'upload'").all().map(r => r.id).filter(id => fs.existsSync(chunkedOf(id))));
+  for (const id of db.prepare("SELECT id FROM transfers WHERE status = 'active' AND stage = 'upload'").all().map(r => r.id)) {
+    if (!resumable.has(id)) db.prepare("UPDATE transfers SET status = 'failed', finished_at = ?, error = 'The HP restarted during the upload. Retry to send it again.' WHERE id = ?").run(now(), id);
+  }
   db.prepare("UPDATE transfers SET status = 'queued', stage = 'waiting' WHERE status = 'active' AND stage = 'deliver'").run();
   {
-    const keep = new Set(db.prepare("SELECT id FROM transfers WHERE status = 'queued' OR (status = 'failed' AND uploaded_at IS NOT NULL)").all().map(r => r.id + '.bin'));
+    const keep = new Set(db.prepare("SELECT id FROM transfers WHERE status = 'queued' OR (status = 'failed' AND uploaded_at IS NOT NULL)").all().map(r => r.id + '.bin')
+      .concat([...resumable].map(id => id + '.chunked')));
     for (const f of fs.readdirSync(spoolDir)) if (!keep.has(f)) fs.promises.unlink(path.join(spoolDir, f)).catch(() => {});
   }
 
@@ -150,6 +156,7 @@ function createTransfers({ db, dataDir, spoolDir, log = () => {}, onChange = () 
       const t = find(id);
       if (!t || t.userId !== userId || t.from !== (from || null)) throw NOT_FOUND();
       if (t.status !== 'active' || t.stage !== 'upload' || inFlight.has(id)) throw new AuthError(409, 'INVALID', 'This transfer isn’t waiting for its file.');
+      if (fs.existsSync(chunkedOf(id))) throw new AuthError(409, 'INVALID', 'This transfer’s file is arriving as a resumable upload. Carry that on, or cancel it first.');
       const declared = Number(stream.headers && stream.headers['content-length']);
       if (declared !== t.size) throw new AuthError(400, 'INVALID', `Send exactly ${t.size} bytes.`);
       let bytes = 0, out;
@@ -186,6 +193,36 @@ function createTransfers({ db, dataDir, spoolDir, log = () => {}, onChange = () 
       const ms = Math.max(1, Date.now() - started);
       log(`Transfer ${id}: ${cur.fileName} (${cur.size} bytes) is on the HP, for ${cur.toName || cur.to}`);
       return update(id, { status: 'queued', stage: 'waiting', bytesDone: 0, uploadedAt: now(), uploadSpeed: Math.round(cur.size / ms * 1000) });
+    },
+
+    // ---------- resumable uploads (4-2, uploads.js) ----------
+    // Where a resumable upload for this transfer puts its bytes; only the sender, on the device it sent
+    // from, while the transfer waits for its file.
+    beginChunked(id, { userId, from }) {
+      const t = find(id);
+      if (!t || t.userId !== userId || t.from !== (from || null)) throw NOT_FOUND();
+      if (t.status !== 'active' || t.stage !== 'upload' || inFlight.has(id)) throw new AuthError(409, 'INVALID', 'This transfer isn’t waiting for its file.');
+      if (fs.existsSync(chunkedOf(id))) throw new AuthError(409, 'BUSY', 'This transfer already has a resumable upload. Ask it where it got to (GET /api/uploads).');
+      return { path: chunkedOf(id), size: t.size, name: t.fileName };
+    },
+    progress(id, bytes) { tick(id, 'upload', bytes); },
+    // The last piece arrived: the file is on the HP, as after a one-request upload.
+    async finishChunked(id, bytes) {
+      const cur = find(id);
+      if (!cur || cur.status !== 'active' || cur.stage !== 'upload') { removeFile(id); throw new AuthError(409, 'CANCELLED', 'The transfer was cancelled.'); }
+      if (bytes !== cur.size) throw new AuthError(400, 'INVALID', 'The file isn’t complete.');
+      await fs.promises.rename(chunkedOf(id), fileOf(id));
+      live.delete(id);
+      const ms = Math.max(1, Date.now() - Date.parse(cur.startedAt));
+      log(`Transfer ${id}: ${cur.fileName} (${cur.size} bytes) is on the HP, for ${cur.toName || cur.to}`);
+      return update(id, { status: 'queued', stage: 'waiting', bytesDone: 0, uploadedAt: now(), uploadSpeed: Math.round(cur.size / ms * 1000) });
+    },
+    // A resumable upload was abandoned (dropped after a day idle): the transfer fails, for Retry.
+    failChunked(id, reason) {
+      const t = find(id);
+      fs.promises.unlink(chunkedOf(id)).catch(() => {});
+      live.delete(id);
+      if (t && t.status === 'active' && t.stage === 'upload') update(id, { status: 'failed', finishedAt: now(), error: reason });
     },
 
     // The sender or the master. The HP's copy is deleted; a receiving agent is told by onChange.

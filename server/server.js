@@ -18,6 +18,7 @@ const { openDb } = require('./db');
 const { createEvents } = require('./events');
 const { createUpdates, publicRelease } = require('./updates');
 const { createTls } = require('./tls');
+const { createUploads } = require('./uploads');
 
 const UI_ROOT = path.resolve(__dirname, '..', 'ui');
 // Overridable so the tests can run a server on a throwaway config and data folder.
@@ -282,6 +283,23 @@ function announceProgress(t, p) {
   hub.toViewers(mayWatch(t), { type: 'progress', id: t.id, stage: p.stage, bytesDone: p.bytesDone, size: t.size, speed: p.speed });
 }
 // A device coming online gets everything waiting for it: the offline queue (D-07).
+// ---------- resumable uploads (Phase 4, 4-2) ----------
+// For the iPhone's large videos: a file sent in pieces, carried on after a drop. Its last piece places it
+// as the one-request upload would: in a share's folder (owned by the uploader), or a transfer's queue.
+const uploads = createUploads({ dataDir: DATA_DIR, log: m => console.log('  ' + m),
+  onProgress: (s, bytes) => { if (s.target.kind === 'transfer') transfers.progress(s.target.transferId, bytes); },
+  onDropped: (s, why) => { if (s.target.kind === 'transfer') transfers.failChunked(s.target.transferId, `The upload stopped: ${why}`); },
+  finalize: async s => {
+    if (s.target.kind === 'transfer') return publicTransfer(await transfers.finishChunked(s.target.transferId, s.size));
+    const t = s.target;
+    const placed = await files.placeUpload({ shareId: t.shareId, folderRel: t.folderRel, dir: t.dir, name: s.name }, s.temp);
+    own.setRecord(t.shareId, placed.rel, { ownerId: s.userId, uploadedBy: s.userId });
+    files.forget(t.shareId);
+    const view = own.view({ accountId: s.userId, type: (auth.listAccounts().find(a => a.id === s.userId) || {}).type || 'device' });
+    return (await files.listFolder(t.shareId, t.folderRel, view)).items.find(e => e.name === placed.name) || { name: placed.name };
+  } });
+setInterval(() => uploads.sweep(), 3600e3).unref();
+
 // ---------- updates (Phase 3, 3-5) ----------
 // The newest desktop-tool installer and its version (config "updatesDir", default data/updates). A new
 // one is announced to everyone, as a hub message and as a notification event.
@@ -395,7 +413,7 @@ async function inOneStep(changeOwnership, changeAccount) {
 
 async function handleApi(req, res, url, query) {
   const m = req.method;
-  const upload = (/^\/api\/(shares|transfers)\/[A-Za-z0-9_-]{1,64}\/file$/.test(url) || /^\/api\/updates\/files\/[^/]+$/.test(url)) && m === 'PUT';
+  const upload = (/^\/api\/(shares|transfers)\/[A-Za-z0-9_-]{1,64}\/file$/.test(url) || /^\/api\/updates\/files\/[^/]+$/.test(url) || /^\/api\/uploads\/[A-Za-z0-9_-]{1,64}$/.test(url)) && m === 'PUT';
   if (m !== 'GET' && m !== 'HEAD') checkWrite(req, upload);
   const body = !upload && (m === 'POST' || m === 'PATCH' || m === 'PUT') ? await readBody(req) : {};
 
@@ -593,6 +611,40 @@ async function handleApi(req, res, url, query) {
     return sendJSON(res, 200, events.since(audience, query.get('after'), query.get('limit') || 100));
   }
 
+  // ---------- resumable uploads (4-2) ----------
+  // Start: { shareId, folder, name, size } for Files, or { transferId } for a send (its file, after
+  // POST /api/transfers). Then PUT …/<id>?offset= with each piece (X-Attic-Upload: 1), GET …/<id> to
+  // ask where it got to, DELETE …/<id> to give up. Only the account, on the device that started it.
+  if (url === '/api/uploads' && m === 'POST') {
+    const who = requireSession(req);
+    const owner = { userId: who.session.accountId, deviceId: deviceIdOf(req) };
+    if (body.transferId !== undefined) {
+      const t = transfers.beginChunked(String(body.transferId), { userId: owner.userId, from: owner.deviceId });
+      return sendJSON(res, 201, await uploads.create(Object.assign({}, owner, { size: t.size, name: t.name, temp: t.path, target: { kind: 'transfer', transferId: String(body.transferId) } })));
+    }
+    const size = body.size;
+    if (!Number.isSafeInteger(size) || size < 0) throw new AuthError(400, 'INVALID', 'Give the file’s size in bytes.');
+    if (size > MAX_UPLOAD) throw new FileError(413, 'TOO_LARGE', 'Too large. The limit is 20 GB per file.');
+    const prep = await files.prepareUpload(String(body.shareId || ''), typeof body.folder === 'string' ? body.folder : '', body.name, own.view(who.session));
+    // Room for it now, on the share's drive (the bytes go straight there).
+    const st = await fs.promises.statfs(prep.dir);
+    if (size > st.bavail * st.bsize) throw new FileError(507, 'DISK_FULL', `${prep.shareName} doesn’t have room for that file.`);
+    return sendJSON(res, 201, await uploads.create(Object.assign({}, owner, { size, name: prep.name, temp: prep.temp,
+      target: { kind: 'share', shareId: prep.shareId, folderRel: prep.folderRel, dir: prep.dir } })));
+  }
+  const upl = /^\/api\/uploads\/([A-Za-z0-9_-]{1,64})$/.exec(url);
+  if (upl) {
+    const who = requireSession(req);
+    const owner = { userId: who.session.accountId, deviceId: deviceIdOf(req) };
+    if (m === 'GET') return sendJSON(res, 200, uploads.status(upl[1], owner));
+    if (m === 'DELETE') return sendJSON(res, 200, uploads.cancel(upl[1], owner));
+    if (m === 'PUT') {
+      // A wrong offset, or a piece cut off, answers with the offset the HP has, to carry on from.
+      try { return sendJSON(res, 200, await uploads.append(upl[1], owner, query.get('offset'), req)); }
+      catch (e) { if (e instanceof AuthError && e.offset !== undefined) return sendJSON(res, e.status, { code: e.code, message: e.message, offset: e.offset }); throw e; }
+    }
+  }
+
   // ---------- updates (3-5) ----------
   // The newest installer; ?current=<the caller's version> adds whether it's newer. 404 NO_UPDATE if none.
   if (url === '/api/updates/latest' && m === 'GET') {
@@ -747,6 +799,12 @@ async function handleRequest(req, res) {
   serveStatic(req, res);
 }
 const server = http.createServer(handleRequest);
+// Large uploads (4-2): Node ends any request still running after 5 minutes by default, which cuts off a
+// phone's multi-GB video over Wi-Fi near the end. There's no limit on a request's total time; instead a
+// connection that's gone quiet (nothing sent or received for 5 minutes) is closed.
+const IDLE_MS = +process.env.ATTIC_IDLE_TIMEOUT_MS || 5 * 60e3;
+function tune(s) { s.requestTimeout = 0; s.timeout = IDLE_MS; return s; }
+tune(server);
 
 // ---------- the live hub (Phase 2, 2-3) ----------
 // GET /api/hub as a WebSocket. ?role=agent: a paired PC's background part, identified by its device
@@ -800,7 +858,7 @@ if (process.env.ATTIC_SUPERVISOR_PID) {
 // change or it nears its end.
 function startHttps() {
   return new Promise(resolve => {
-    const s = https.createServer({ key: tls.key, cert: tls.cert, minVersion: 'TLSv1.2' }, handleRequest);
+    const s = tune(https.createServer({ key: tls.key, cert: tls.cert, minVersion: 'TLSv1.2' }, handleRequest));
     s.on('upgrade', handleUpgrade);
     s.on('tlsClientError', () => {}); // a phone that doesn't trust the CA yet: nothing to log
     s.once('error', e => { if (e.code === 'EADDRINUSE' || e.code === 'EACCES') resolve(null); else { console.error(e.message); resolve(null); } });
