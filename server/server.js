@@ -3,7 +3,7 @@
 // needs a session. Still no folder listing and no paths from the client. Core Node only.
 // Usage: node server/server.js
 'use strict';
-const http = require('http'), fs = require('fs'), path = require('path'), os = require('os');
+const http = require('http'), https = require('https'), fs = require('fs'), path = require('path'), os = require('os');
 const { createAuth, AuthError } = require('./auth');
 const { createSafePath } = require('./safe-path');
 const { createFiles, parseRange, FileError, INLINE } = require('./files');
@@ -17,6 +17,7 @@ const { createTransfers, publicTransfer } = require('./transfers');
 const { openDb } = require('./db');
 const { createEvents } = require('./events');
 const { createUpdates, publicRelease } = require('./updates');
+const { createTls } = require('./tls');
 
 const UI_ROOT = path.resolve(__dirname, '..', 'ui');
 // Overridable so the tests can run a server on a throwaway config and data folder.
@@ -28,7 +29,8 @@ const DEVICE_COOKIE = 'attic_device';
 const DEVICE_COOKIE_AGE = 400 * 86400; // the longest a browser keeps a cookie; renewed at every sign-in
 const MAX_BODY = 16 * 1024;
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png', '.ico': 'image/x-icon', '.webp': 'image/webp', '.jpg': 'image/jpeg' };
+  '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png', '.ico': 'image/x-icon', '.webp': 'image/webp', '.jpg': 'image/jpeg',
+  '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8' }; // the last three for 4-1's Home Screen app
 
 function loadConfig() {
   let cfg;
@@ -47,7 +49,15 @@ function loadConfig() {
   const p = cfg.pairing || {};
   return { raw: cfg, port: +process.env.ATTIC_PORT || cfg.port || 8080, host: cfg.host || '0.0.0.0', shares: cfg.shares,
     discovery: { enabled: d.enabled !== false && discoveryPort > 0, port: discoveryPort },
-    pairing: { required: p.required !== false, trustThisPC: p.trustThisPC !== false } };
+    pairing: { required: p.required !== false, trustThisPC: p.trustThisPC !== false },
+    // HTTPS (Phase 4, 4-1), for Safari on the iPhone: on unless "https": { "enabled": false }; port 0 also
+    // turns it off. "names" adds host names the HP's certificate (and its CA, when first made) covers.
+    https: (() => {
+      const h = cfg.https || {};
+      const envPort = process.env.ATTIC_HTTPS_PORT;
+      const port = envPort !== undefined ? +envPort : h.port !== undefined ? +h.port : 8443;
+      return { enabled: h.enabled !== false && port > 0, port, names: Array.isArray(h.names) ? h.names : [] };
+    })() };
 }
 const CONFIG = loadConfig();
 const auth = createAuth(DATA_DIR);
@@ -62,6 +72,10 @@ const MAX_UPLOAD = 20e9;
 const SERVER_ID = loadServerId(DATA_DIR);
 const SERVER_NAME = os.hostname();
 const pairing = createPairing(DATA_DIR);
+// HTTPS (4-1): the HP's own certificate authority and server certificate, in data/tls.
+const tls = CONFIG.https.enabled ? createTls(DATA_DIR, { hostname: SERVER_NAME, extraNames: CONFIG.https.names, log: m => console.log('  ' + m) }) : null;
+let httpsListening = null; // the HTTPS port once it's up
+const tlsSummary = () => tls ? { caFingerprint: tls.caFingerprint, httpsPort: httpsListening } : null;
 // The HP in the device list. It never pairs: requests from this PC itself are the HP.
 const SERVER_DEVICE = { id: 'server', name: SERVER_NAME, kind: DEVICE_KINDS.includes(CONFIG.raw.serverKind) ? CONFIG.raw.serverKind : 'desktop',
   os: os.version(), role: 'server' };
@@ -154,11 +168,14 @@ function readCookie(req, name) {
 }
 // HttpOnly: page scripts can't read it. SameSite=Strict: other sites can't send it. No Secure flag until
 // HTTPS arrives; until then the cookie crosses the home network in the clear, like everything else.
-function sessionCookie(token, maxAge) {
-  return `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict` + (maxAge ? `; Max-Age=${Math.floor(maxAge)}` : '');
+// Over HTTPS (4-1) cookies are also Secure, so a browser never sends them back over plain http.
+function sessionCookie(token, maxAge, secure) {
+  return `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict` + (maxAge ? `; Max-Age=${Math.floor(maxAge)}` : '') + (secure ? '; Secure' : '');
 }
 const clearCookie = `${COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`;
-const deviceCookie = token => `${DEVICE_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${DEVICE_COOKIE_AGE}`;
+const deviceCookie = (token, secure) => `${DEVICE_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${DEVICE_COOKIE_AGE}` + (secure ? '; Secure' : '');
+const isHttps = req => !!req.socket.encrypted;
+const ownOrigin = req => `${isHttps(req) ? 'https' : 'http'}://${req.headers.host}`;
 const clearDeviceCookie = `${DEVICE_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`;
 
 function readBody(req) {
@@ -186,7 +203,7 @@ function checkWrite(req, upload) {
     throw new AuthError(415, 'INVALID', upload ? 'Upload refused.' : 'Send JSON.');
   }
   const origin = req.headers.origin;
-  if (origin && origin !== `http://${req.headers.host}`) throw new AuthError(403, 'FORBIDDEN', 'Cross-site request refused.');
+  if (origin && origin !== ownOrigin(req)) throw new AuthError(403, 'FORBIDDEN', 'Cross-site request refused.');
 }
 
 const clientAddr = req => req.socket.remoteAddress || 'unknown';
@@ -385,6 +402,23 @@ async function handleApi(req, res, url, query) {
   // Public: which Attic server this is. Nothing about accounts, shares or files.
   if (url === '/api/hello' && m === 'GET') return sendJSON(res, 200, { app: 'Attic', api: 1, serverId: SERVER_ID, name: SERVER_NAME });
 
+  // ---------- HTTPS trust (Phase 4, 4-1) ----------
+  // Public, over plain http too, because a phone needs them before it trusts the HTTPS address: the CA's
+  // fingerprint and where HTTPS is, the CA itself, and an iOS profile holding it. Only the CA's
+  // certificate (public by nature) leaves the HP; its key never does.
+  if (url.startsWith('/api/tls') && m === 'GET') {
+    if (!tls) throw new AuthError(404, 'HTTPS_OFF', 'HTTPS is turned off on this HP.');
+    if (url === '/api/tls') return sendJSON(res, 200, Object.assign(tlsSummary(), tls.info(), { caUrl: '/api/tls/ca.cer', profileUrl: '/api/tls/profile.mobileconfig' }));
+    if (url === '/api/tls/ca.cer') {
+      res.writeHead(200, { 'Content-Type': 'application/x-x509-ca-cert', 'Content-Disposition': 'attachment; filename="attic-hub-ca.cer"', 'Cache-Control': 'no-store' });
+      return res.end(tls.caDer());
+    }
+    if (url === '/api/tls/profile.mobileconfig') {
+      res.writeHead(200, { 'Content-Type': 'application/x-apple-aspen-config', 'Content-Disposition': 'attachment; filename="Attic Hub.mobileconfig"', 'Cache-Control': 'no-store' });
+      return res.end(tls.profile());
+    }
+  }
+
   // ---------- pairing (Phase 2, 2-2) ----------
   // Public: is this device paired? A token the HP no longer knows (the device was unpaired) is cleared.
   const device = identifyDevice(req);
@@ -399,7 +433,9 @@ async function handleApi(req, res, url, query) {
     const r = pairing.claim(body, clientAddr(req));
     console.log(`  Paired: ${r.device.name} (${r.device.id}) from ${r.device.lastAddress}`);
     hub.deviceAdded(r.device.id);
-    return sendJSON(res, 201, { device: { id: r.device.id, name: r.device.name, kind: r.device.kind } }, { 'Set-Cookie': deviceCookie(r.token) });
+    // The HP's certificate authority goes with the identity ("trusted at pairing"): a client can pin it.
+    return sendJSON(res, 201, { device: { id: r.device.id, name: r.device.name, kind: r.device.kind }, tls: tlsSummary() },
+      { 'Set-Cookie': deviceCookie(r.token, isHttps(req)) });
   }
   // Everything else needs a paired device first, setup and sign-in included.
   if (CONFIG.pairing.required && !device) throw NOT_PAIRED();
@@ -417,8 +453,8 @@ async function handleApi(req, res, url, query) {
     if (m === 'POST') {
       const r = await auth.signIn(body, clientAddr(req), deviceIdOf(req));
       // Signing in also renews the device cookie, so a device in regular use never loses its pairing.
-      const cookies = [sessionCookie(r.token, r.maxAge)];
-      if (device && device !== SERVER_DEVICE && readCookie(req, DEVICE_COOKIE)) cookies.push(deviceCookie(readCookie(req, DEVICE_COOKIE)));
+      const cookies = [sessionCookie(r.token, r.maxAge, isHttps(req))];
+      if (device && device !== SERVER_DEVICE && readCookie(req, DEVICE_COOKIE)) cookies.push(deviceCookie(readCookie(req, DEVICE_COOKIE), isHttps(req)));
       return sendJSON(res, 200, { session: r.session, account: r.account }, { 'Set-Cookie': cookies });
     }
     if (m === 'DELETE') {
@@ -693,7 +729,8 @@ function serveStatic(req, res) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
+// One handler for both servers: plain http (the desktop tools, port 8080) and HTTPS (Safari, 4-1).
+async function handleRequest(req, res) {
   let parsed;
   try { parsed = new URL(req.url, 'http://x'); } catch (e) { res.writeHead(400); return res.end(); }
   const url = parsed.pathname;
@@ -708,20 +745,21 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
   serveStatic(req, res);
-});
+}
+const server = http.createServer(handleRequest);
 
 // ---------- the live hub (Phase 2, 2-3) ----------
 // GET /api/hub as a WebSocket. ?role=agent: a paired PC's background part, identified by its device
 // token alone, reporting its own stats. Otherwise a viewer: the interface, with a session on a paired
 // device, like any other API call. Browsers send an Origin header, and it must be this server, so a
 // page on another site can't open a hub connection with this browser's cookies.
-server.on('upgrade', (req, socket) => {
+function handleUpgrade(req, socket) {
   socket.on('error', () => socket.destroy());
   let parsed;
   try { parsed = new URL(req.url, 'http://x'); } catch (e) { return ws.refuse(socket, 400, { code: 'INVALID', message: 'Bad request.' }); }
   if (parsed.pathname !== '/api/hub') return ws.refuse(socket, 404, { code: 'NOT_FOUND', message: 'No such endpoint.' });
   const origin = req.headers.origin;
-  if (origin && origin !== `http://${req.headers.host}`) return ws.refuse(socket, 403, { code: 'FORBIDDEN', message: 'Cross-site request refused.' });
+  if (origin && origin !== ownOrigin(req)) return ws.refuse(socket, 403, { code: 'FORBIDDEN', message: 'Cross-site request refused.' });
   const device = identifyDevice(req);
   const deviceId = deviceIdOf(req), deviceToken = req.deviceToken;
   const stillPaired = () => !device || device === SERVER_DEVICE || !!pairing.resolve(deviceToken);
@@ -743,7 +781,8 @@ server.on('upgrade', (req, socket) => {
   const master = who.session.type === 'master';
   hub.addViewer(conn, { deviceId, accountId: who.session.accountId, master, devices: listDevices(deviceId, master),
     check: () => stillPaired() && !!auth.resolve(sessionToken, deviceId) });
-});
+}
+server.on('upgrade', handleUpgrade);
 const NOT_PAIRED_BODY = { code: 'NOT_PAIRED', message: 'This device isn’t paired with the HP yet. Ask for a pairing code on the HP.' };
 
 // Run by the supervisor (Phase 3, 3-1): if it goes (the Windows task was stopped), so does the server,
@@ -754,6 +793,23 @@ if (process.env.ATTIC_SUPERVISOR_PID) {
     try { process.kill(sup, 0); }
     catch (e) { if (e.code !== 'EPERM') { console.log('Supervisor gone; stopping.'); process.exit(0); } }
   }, 2000).unref();
+}
+
+// HTTPS: the same handlers. If the port is taken the server carries on over http, and says so. The
+// certificate is checked every 10 minutes and re-issued in place (no restart) when the HP's addresses
+// change or it nears its end.
+function startHttps() {
+  return new Promise(resolve => {
+    const s = https.createServer({ key: tls.key, cert: tls.cert, minVersion: 'TLSv1.2' }, handleRequest);
+    s.on('upgrade', handleUpgrade);
+    s.on('tlsClientError', () => {}); // a phone that doesn't trust the CA yet: nothing to log
+    s.once('error', e => { if (e.code === 'EADDRINUSE' || e.code === 'EACCES') resolve(null); else { console.error(e.message); resolve(null); } });
+    s.listen(CONFIG.https.port, CONFIG.host, () => {
+      httpsListening = s.address().port;
+      setInterval(() => { if (tls.refresh()) s.setSecureContext({ key: tls.key, cert: tls.cert, minVersion: 'TLSv1.2' }); }, 10 * 60e3).unref();
+      resolve(httpsListening);
+    });
+  });
 }
 
 server.on('error', e => {
@@ -771,6 +827,10 @@ server.listen(CONFIG.port, CONFIG.host, async () => {
     const d = await startResponder({ port: CONFIG.discovery.port, httpPort: CONFIG.port, name: SERVER_NAME, serverId: SERVER_ID, log: m => console.log('  ' + m) });
     if (d.status.listening) console.log(`  Discovery:    answering on UDP ${d.status.port} (home network only)`);
   } else console.log('  Discovery:    off');
+  if (tls) {
+    const port = await startHttps();
+    console.log(port ? `  HTTPS:        https://<address above>:${port} (for Safari; trust profile at /api/tls/profile.mobileconfig)` : `  HTTPS:        off: port ${CONFIG.https.port} is already in use`);
+  } else console.log('  HTTPS:        off');
   const paired = pairing.list().length;
   console.log(CONFIG.pairing.required ? `  Pairing:      required (${paired} paired device${paired === 1 ? '' : 's'}${CONFIG.pairing.trustThisPC ? '; this PC is trusted' : ''})`
     : '  Pairing:      OFF — any device on the network can sign in');

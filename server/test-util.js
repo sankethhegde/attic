@@ -8,7 +8,7 @@ const path = require('path');
 const { encode, createParser, OP } = require('./ws');
 
 function startServer(env) {
-  const s = spawn(process.execPath, [path.join(__dirname, 'server.js')], { env: Object.assign({}, process.env, { ATTIC_DISCOVERY_PORT: '0' }, env), stdio: ['ignore', 'pipe', 'inherit'] });
+  const s = spawn(process.execPath, [path.join(__dirname, 'server.js')], { env: Object.assign({}, process.env, { ATTIC_DISCOVERY_PORT: '0', ATTIC_HTTPS_PORT: '0' }, env), stdio: ['ignore', 'pipe', 'inherit'] });
   let out = '';
   return new Promise((resolve, reject) => {
     s.stdout.on('data', d => { out += d; if (out.includes('Shares:')) resolve(s); });

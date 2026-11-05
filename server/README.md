@@ -11,6 +11,8 @@ The server that runs on the HP laptop. Built one milestone at a time from `docs/
 - **3-2:** it sends each client the events it should turn into Windows notifications. See [Notification events](#notification-events-phase-3-milestone-3-2-t-05).
 - **3-5:** it serves the newest desktop-tool installer and its version, so every client can update itself. See [Updates](#updates-phase-3-milestone-3-5-t-10). 3-3 and 3-4 have no server side.
 
+**Phase 4 on the server:** it serves the interface to Safari over HTTPS, with a certificate the iPhone trusts (4-1). See [HTTPS for the iPhone](#https-for-the-iphone-phase-4-milestone-4-1).
+
 ## Run it
 
 ```
@@ -420,6 +422,62 @@ The installers aren't code-signed yet, so Windows SmartScreen may warn when one 
 - `latest.yml`;
 - the refusals: not the master, a bad name, not a program, the same or an older version, and path tricks;
 - replacing, keeping 3, and a restart.
+
+## HTTPS for the iPhone (Phase 4, milestone 4-1)
+
+Safari needs HTTPS for a Home Screen web app, and the requirements want traffic encrypted. The server therefore also listens on **HTTPS, port 8443**, with the same interface and API. Plain http on 8080 stays, for the desktop tools. This is the HP's half of 4-1; the phone layout, manifest and icons are the Acer's half.
+
+**No certificate to buy, nothing to install on the HP.** On first start the HP makes its own small certificate authority, "Attic Hub CA (DESKTOP-…)", in `server/data/tls/` (gitignored). With it, it issues a server certificate covering:
+- its PC name, plain and `.local`;
+- `localhost`;
+- every home-network address it has.
+
+`tls.js` builds both certificates itself and signs them with `node:crypto`, so no OpenSSL command is needed. The server certificate meets Apple's rules:
+- ECDSA P-256 with SHA-256;
+- its names in Subject Alternative Name;
+- usable for server authentication only;
+- valid for 397 days.
+
+It's re-issued in place, with no restart, when the HP's address changes (as it did, from .12 to .3) or when it has less than 30 days left. The phone never has to trust anything again.
+
+**The CA can only vouch for this PC.** It carries name constraints. They limit it to this PC's name, `localhost` and home-network addresses (10/8, 172.16/12, 192.168/16, 127/8). So even if its key were copied off the HP, it couldn't be used to fake a real website on a phone that trusts it. `https.test.js` checks that a certificate the CA signs for `example.com`, `www.apple.com` or `8.8.8.8` is refused.
+
+**On the iPhone, once:**
+1. In Safari, open `http://<HP address>:8080/api/tls/profile.mobileconfig` and allow the download.
+2. Settings → General → VPN & Device Management → "Attic Hub (DESKTOP-…)" → Install.
+3. Settings → General → About → Certificate Trust Settings → turn on "Attic Hub CA (DESKTOP-…)".
+4. Open `https://<HP address>:8443`. To check it's the right CA, compare its fingerprint with `caFingerprint` from `/api/tls`.
+
+| Route | Who | Does |
+| --- | --- | --- |
+| `GET /api/tls` | anyone, over http too | `{ caFingerprint, httpsPort, names, validUntil, caUrl, profileUrl }` |
+| `GET /api/tls/ca.cer` | anyone | The CA certificate (DER), for anything that wants it as a file |
+| `GET /api/tls/profile.mobileconfig` | anyone | The iOS profile that installs the CA |
+
+These are public because a phone needs them before it trusts the HTTPS address, and a CA certificate is public by nature. The CA's key and the server's key never leave `data/tls/`.
+
+**Trusted at pairing.** `POST /api/pairing/claim` now also returns `tls: { caFingerprint, httpsPort }`, so a client can pin the HP's CA.
+
+**Over HTTPS:**
+- **Cookies:** sign-in and device cookies are `Secure`.
+- **Origin:** a request must come from the `https://` origin. An `http://` origin counts as another site.
+- **Live hub:** it works as `wss://…:8443/api/hub`.
+
+**Settings and failures**
+- **Turning it off:** `"https": { "enabled": false }`, or set `"port"`. `"names"` adds host names; set them before the CA is first made, because its constraints are fixed then.
+- **Port taken:** the server carries on over http and prints `HTTPS: off`.
+- **Static files:** `.webmanifest`, `.woff2` and `.txt` are now served with their right types, for the Home Screen app.
+- **Firewall:** this HP's "Node.js JavaScript Runtime" firewall rules already allow any port. Elsewhere, allow inbound TCP 8443 on the Private profile, as for 8080.
+
+`https.test.js` covers:
+- the CA and the profile over http;
+- HTTPS trusted with the CA and refused without it;
+- Apple's certificate rules;
+- the name constraints refusing other sites, even when signed with the CA's own key;
+- Secure cookies, the HTTPS origin rule and `wss://`;
+- the fingerprint at pairing;
+- the manifest type, and starting with the port taken;
+- re-issuing on an address change and near the end, with the CA unchanged.
 
 ## Rules that carry over
 
