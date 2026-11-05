@@ -22,7 +22,23 @@
   ui.isDark = () => document.documentElement.dataset.theme === 'dark';
   mq.addEventListener('change', () => { if (themePref === 'system') ui.applyTheme('system'); });
 
-  ui.reducedMotion = () => root.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Low-resource mode (Phase 3, 3-4, T-09): the desktop tool says when a game is running (or the mode is
+  // Always on). Then the whole interface goes still: no animations, transitions, blur or background
+  // slideshow (the low-resource class in app.css), and everything that asks reducedMotion() holds still too.
+  ui.lowResource = false;
+  ui.reducedMotion = () => ui.lowResource || root.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (root.atticDesktop && root.atticDesktop.lowResource) {
+    const applyLow = s => {
+      const on = !!(s && s.active);
+      const flipped = on !== ui.lowResource;
+      ui.lowResource = on;
+      document.documentElement.classList.toggle('low-resource', on);
+      if (flipped) root.dispatchEvent(new CustomEvent('attic:low-resource', { detail: s }));
+      root.dispatchEvent(new CustomEvent('attic:low-state', { detail: s })); // for Settings' status line
+    };
+    root.atticDesktop.lowResource.onChange(applyLow);
+    root.atticDesktop.lowResource.get().then(applyLow).catch(() => {});
+  }
 
   // ---------- toasts ----------
   ui.toast = (msg, kind) => {

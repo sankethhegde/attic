@@ -5,6 +5,8 @@
 // and takes about a second, so they're refreshed every 30 s in the background and the last values reused.
 // `si` is passed in by the desktop tool (it lives in desktop/node_modules); without it, battery is null
 // and the network type is guessed from the adapter's name.
+// 3-4 (T-09): slowMs may be a function, so low-resource mode can stretch that refresh (each one runs
+// PowerShell) while a game runs.
 'use strict';
 const fs = require('fs');
 const os = require('os');
@@ -56,7 +58,7 @@ function createCollector({ si = null, disk = process.env.SystemDrive ? process.e
 
   return async () => {
     if (!slow) await refresh();                     // the first report waits, so it's complete
-    else if (Date.now() - slowAt > slowMs) refresh(); // later ones use the last values meanwhile
+    else if (Date.now() - slowAt > (typeof slowMs === 'function' ? slowMs() : slowMs)) refresh(); // later ones use the last values meanwhile
     let diskTotal = 0, diskFree = 0;
     try { const st = await fs.promises.statfs(disk); diskTotal = st.blocks * st.bsize; diskFree = st.bavail * st.bsize; }
     catch (e) { /* unreadable: reported as zero */ }

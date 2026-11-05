@@ -14,7 +14,10 @@
 // hides it; a client starts with Windows, hidden, unless that's turned off; a file received into the Hub
 // Inbox shows a Windows notification, and so do the HP's events for transfers this PC sent and devices
 // going and coming (agent/notify.js). Preferences are per PC (agent/prefs.js).
-// Explorer integration arrives in 3-3.
+// Milestone 3-3 (T-06 to T-08): the Hub Inbox folder, File Explorer's "Send to Attic Hub", and drops.
+// Milestone 3-4 (T-09): low-resource mode, for the ROG Ally. While a game runs (agent/game-watch.js), or
+// always if chosen, the agent reports every 15 s instead of 3 s, battery and network are read every 2
+// minutes instead of 30 s, and the interface drops its animations, blur and background slideshow.
 const { app, BrowserWindow, Menu, shell, ipcMain, dialog, Notification } = require('electron');
 const path = require('path');
 const os = require('os');
@@ -123,6 +126,7 @@ function setPrefs(patch) {
   prefs = prefsStore.save(patch, mode && mode.mode);
   applyStartWithWindows();
   if (typeof patch.explorerMenu === 'boolean') applyExplorerMenu();
+  if (patch.lowResource) startGameWatch();
   updateTray();
   return prefs;
 }
@@ -162,13 +166,14 @@ if (SUPERVISOR_ARG) {
     tray = require('./tray.js').createTray({
       iconPath: ICON,
       getState: () => ({ status: trayStatus(), mode: mode && mode.mode, startWithWindows: prefs.startWithWindows,
-        canStartWithWindows: app.isPackaged, notify: prefs.notify }),
+        canStartWithWindows: app.isPackaged, notify: prefs.notify, low: lowOut() }),
       actions: {
         open: showWindow,
         openInbox,
         serverControls: () => { showWindow(); if (mode && mode.mode === 'server') showServerPage(); },
         toggleStart: () => setPrefs({ startWithWindows: !prefs.startWithWindows }),
         toggleNotify: group => setPrefs({ notify: { [group]: !prefs.notify[group] } }),
+        setLowResource: m => setPrefs({ lowResource: m }),
         quit: quitApp
       }
     });
@@ -187,6 +192,7 @@ if (SUPERVISOR_ARG) {
 // What the window shows first: the choice (first launch), the search for the HP, or the server's screen.
 function start() {
   if (!mode) return showChooser();
+  startGameWatch(); // only a client watches for games; the role may just have changed
   if (mode.mode === 'server') return showServerPage();
   startSearch();
 }
@@ -302,7 +308,7 @@ async function startAgent() {
   if (!c) return stopAgent();
   if (agent && agentToken === c.value) return; // a sign-in renews the same cookie
   stopAgent();
-  collect = collect || createCollector({ si });
+  collect = collect || createCollector({ si, slowMs: () => (low.active ? LOW_SLOW_MS : 30e3) });
   agentToken = c.value;
   // Files sent to this PC (2-4) are announced over the same connection and collected into the Hub Inbox.
   receiver = createReceiver({ server: s, token: c.value, dir: inboxDir, onEvent: ev => {
@@ -324,7 +330,7 @@ async function startAgent() {
     show: (title, body) => notify(title, body, showWindow),
     enabled: group => !!prefs.notify[group]
   });
-  agent = createAgent({ url: hubUrl(s), token: c.value, collect, onState: st => { agentState = st; }, onMessage: msg => {
+  agent = createAgent({ url: hubUrl(s), token: c.value, collect, pace: statsPace, onState: st => { agentState = st; }, onMessage: msg => {
     if (msg.type === 'event' || msg.type === 'events') feed.handle(msg);
     else if (msg.type === 'inbox') receiver.add(msg.transfers);
     else if (msg.type === 'transfer' && msg.transfer) receiver.add([msg.transfer]);
@@ -397,11 +403,11 @@ ipcMain.on('mode:change', e => { if (trusted(e)) showChooser({ changing: true })
 // ---------- the tool's own preferences (3-2) ----------
 const prefsOut = p => ({ startWithWindows: p.startWithWindows, notifyReceived: p.notify.received, notifyTransfers: p.notify.transfers,
   notifyDevices: p.notify.devices, canStartWithWindows: app.isPackaged, mode: mode && mode.mode,
-  explorerMenu: p.explorerMenu, inboxDefault: !p.inboxDir });
+  explorerMenu: p.explorerMenu, inboxDefault: !p.inboxDir, lowResource: p.lowResource });
 ipcMain.handle('prefs:get', e => trusted(e) && prefs ? prefsOut(prefs) : null);
 ipcMain.handle('prefs:set', (e, patch) => {
   if (!trusted(e) || !patch) return null;
-  return prefsOut(setPrefs({ startWithWindows: patch.startWithWindows, explorerMenu: patch.explorerMenu,
+  return prefsOut(setPrefs({ startWithWindows: patch.startWithWindows, explorerMenu: patch.explorerMenu, lowResource: patch.lowResource,
     notify: { received: patch.notifyReceived, transfers: patch.notifyTransfers, devices: patch.notifyDevices } }));
 });
 if (TEST_HOOKS) {
@@ -412,6 +418,10 @@ if (TEST_HOOKS) {
   ipcMain.handle('test:closeWindow', () => { if (win) win.close(); return true; }); // what the window's X does
   ipcMain.handle('test:loginItem', () => app.getLoginItemSettings({ path: process.execPath, args: ['--hidden'] }).openAtLogin);
   ipcMain.handle('test:explorerMenu', () => explorer.status(process.execPath));
+  // 3-4: pretend the game watcher saw a game ({ game, why, app }), or null to go back to the real one;
+  // and the pace the agent is using now.
+  ipcMain.handle('test:game', (e, g) => { testGame = g || null; applyLow(); return lowOut(); });
+  ipcMain.handle('test:pace', () => ({ statsMs: statsPace(3000), slowMs: low.active ? LOW_SLOW_MS : 30e3, watcherPid: watcher ? watcher.pid : null }));
 }
 
 ipcMain.handle('server:state', async e => {
@@ -539,6 +549,65 @@ ipcMain.handle('send:resend', async (e, t) => {
     return { ok: true };
   } catch (err) { return { error: err.message }; }
 });
+
+// ---------- low-resource mode (3-4, T-09) ----------
+// Automatic watches for a game with a small helper (agent/game-watch.js), compiled once into the tool's
+// user-data folder. It runs only while Automatic is chosen on a client; Always on needs no watching.
+const gameWatch = require(path.join(ROOT, 'agent', 'game-watch.js'));
+const LOW_STATS_MS = 15e3;   // a report every 15 s instead of every 3 s
+const LOW_SLOW_MS = 120e3;   // battery and network (PowerShell each time) every 2 minutes instead of 30 s
+let watcher = null, watchStarting = false, watchProblem = null, game = null, testGame = null, watchRetry = 0;
+let low = { active: false, reason: null };
+function statsPace(ms) { return low.active ? Math.max(ms, LOW_STATS_MS) : ms; }
+// For Settings and the tray: the choice, whether it's on now and why, and whether games can be seen.
+function lowOut() {
+  const pref = prefs ? prefs.lowResource : 'auto';
+  const client = !!mode && mode.mode === 'client';
+  const detect = pref !== 'auto' || !client ? 'off' : testGame || (watcher && watcher.state) ? 'ok' : watchProblem ? 'unavailable' : 'starting';
+  return { pref, active: low.active, reason: low.reason || null, app: low.app || null, detect, problem: watchProblem,
+    statsSeconds: Math.round(statsPace(3000) / 1000) };
+}
+function applyLow() {
+  if (!prefs) return;
+  const pref = mode && mode.mode === 'server' && prefs.lowResource === 'auto' ? 'off' : prefs.lowResource;
+  const next = gameWatch.decide(pref, testGame || game);
+  const flipped = next.active !== low.active;
+  low = next;
+  if (flipped && agent) agent.nudge(); // the new pace starts now, not after the old wait
+  if (win && !win.isDestroyed()) win.webContents.send('low:state', lowOut());
+  updateTray();
+}
+async function startGameWatch() {
+  if (!prefs) return;
+  const want = prefs.lowResource === 'auto' && !!mode && mode.mode === 'client' && process.platform === 'win32';
+  if (!want) { stopGameWatch(); return applyLow(); }
+  if (watcher || watchStarting) return applyLow();
+  watchStarting = true;
+  try {
+    const exe = await gameWatch.ensureHelper(path.join(app.getPath('userData'), 'helpers'));
+    if (!exe) throw new Error('This PC has no .NET Framework C# compiler, so Attic Hub can’t tell when a game runs.');
+    if (prefs.lowResource !== 'auto') return;
+    watchProblem = null;
+    // Tests point the Steam check at a key of their own, and check more often.
+    const args = [];
+    if (process.env.ATTIC_STEAM_KEY) args.push('--steam-key', process.env.ATTIC_STEAM_KEY);
+    if (process.env.ATTIC_GAMEWATCH_MS) args.push('--every', process.env.ATTIC_GAMEWATCH_MS);
+    const w = watcher = gameWatch.watch({ exe, args, onChange: s => { game = s; applyLow(); },
+      onExit: () => {
+        if (watcher !== w) return;
+        watcher = null; game = null; applyLow();
+        clearTimeout(watchRetry); watchRetry = setTimeout(startGameWatch, 10e3);
+      } });
+  } catch (err) { watchProblem = err.message; }
+  finally { watchStarting = false; applyLow(); }
+}
+function stopGameWatch() {
+  clearTimeout(watchRetry);
+  if (watcher) { const w = watcher; watcher = null; w.stop(); }
+  game = null;
+}
+app.on('will-quit', stopGameWatch);
+ipcMain.handle('low:get', e => trusted(e) ? lowOut() : null);
 
 // The right-click entry follows its preference, in the installed app only (a development copy would
 // point Explorer at electron.exe).

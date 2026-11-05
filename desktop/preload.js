@@ -67,6 +67,12 @@ contextBridge.exposeInMainWorld('atticDesktop', {
     get: () => ipcRenderer.invoke('prefs:get'),
     set: patch => ipcRenderer.invoke('prefs:set', JSON.parse(JSON.stringify(patch || {})))
   },
+  // Low-resource mode (3-4): whether it's on now, and why. The interface drops its animations meanwhile.
+  // One listener per page (ui.js), which passes changes on as the window event "attic:low-state".
+  lowResource: {
+    get: () => ipcRenderer.invoke('low:get'),
+    onChange: cb => { ipcRenderer.removeAllListeners('low:state'); ipcRenderer.on('low:state', (_e, s) => cb(s)); }
+  },
   // The end-to-end tests only (ATTIC_TEST_HOOKS=1): the tray menu and the notifications shown.
   test: arg('test') ? {
     tray: () => ipcRenderer.invoke('test:tray'),
@@ -75,6 +81,8 @@ contextBridge.exposeInMainWorld('atticDesktop', {
     window: () => ipcRenderer.invoke('test:window'),
     closeWindow: () => ipcRenderer.invoke('test:closeWindow'),
     loginItem: () => ipcRenderer.invoke('test:loginItem'),
-    explorerMenu: () => ipcRenderer.invoke('test:explorerMenu')
+    explorerMenu: () => ipcRenderer.invoke('test:explorerMenu'),
+    game: g => ipcRenderer.invoke('test:game', g ? JSON.parse(JSON.stringify(g)) : null),
+    pace: () => ipcRenderer.invoke('test:pace')
   } : undefined
 });

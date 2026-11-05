@@ -107,6 +107,18 @@ Tests: `node --test "agent/*.test.js"` (`notify.js` and `prefs.js`). Also `deskt
 
 Tests: `node --test "agent/*.test.js"` (`explorer.js`, `checkFolder`, the new preferences). Also `desktop/scripts/shortcuts-test.mjs`, the real tool with real `--send` launches; with the packaged exe it also checks the real registry entry, and always removes it.
 
+## Low-resource mode for the ROG Ally (Phase 3, milestone 3-4, T-09)
+
+- **`game-watch.js`** tells whether a game is running. Two signs count: Steam's `RunningAppID` (under `HKCU\Software\Valve\Steam`) isn't 0, or a full-screen window is in front (not Attic Hub's own, not the desktop, and not a maximized window). Windows' "Direct3D full screen" state counts too.
+  - The check is a tiny C# helper, compiled once on first use with the C# compiler that comes with Windows (.NET Framework 4.8), into `helpers\` in the tool's user-data folder.
+  - It checks every 2 s, prints a line only when the answer changes, and exits when the tool does. About 16 MB, and no CPU between checks.
+  - Without the compiler, Automatic can't tell, and Settings says so.
+- **The preference** is `prefs.lowResource`: `auto` (a client's default), `on` or `off` (the server's default). The watcher runs only while it's `auto` on a client.
+- **While it's on**, `desktop/main.js` gives the agent a slower pace (`pace` in `hub-agent.js`): a report every 15 s instead of 3 s. `stats.js` reads battery and network every 2 minutes instead of 30 s. `nudge()` reports at once when the mode changes, so the HP sees the new pace straight away. The HP decides online from the connection, not from the reports, so the device stays online.
+- **The interface** hears it through the bridge (`atticDesktop.lowResource`). `ui.js` puts `low-resource` on the page, which stops animations, transitions, blur and the login slideshow. Settings → This PC and the tray show the choice and say why it's on.
+
+Tests: `node --test "agent/*.test.js"` (the decision, the pace, and the real helper seeing a Steam game through a test registry key). Also `desktop/scripts/low-resource-test.mjs`, the real tool with the real helper and a real full-screen window.
+
 ## Still to come
 
-The rest of Phase 3: the ROG Ally's low-resource mode (3-4), and updates (3-5).
+The rest of Phase 3: updates (3-5).

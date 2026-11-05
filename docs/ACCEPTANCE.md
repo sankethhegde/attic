@@ -281,6 +281,28 @@ Found during the run:
 
 For the final pass on the real machines: right-click a file on the Acer in Windows 11's File Explorer, and uninstall to see the entry go.
 
+## Phase 3, milestone 3-4: ROG Ally low-resource mode (5 Nov 2026)
+
+3-4 has no server side. Checked in the real tool against a throwaway server. The game watcher was the real one, told about a Steam game through a registry key of the test's own (never Steam's), and shown a real full-screen window from another program.
+
+| Check | Result | How it was verified |
+| --- | --- | --- |
+| Automatic by default on a client; off with no game | ✅ | Settings → This PC → Low-resource mode shows Automatic and "Off now: no game is running". The watcher was compiled on first use into the tool's own folder (under a second) and is running |
+| A game turns it on (T-09) | ✅ | A Steam game starting turned it on within a moment: Settings says "On now: a Steam game is running", and the tray says so too. A full-screen window from another program did the same ("a full-screen app is in front"). A maximized window doesn't count |
+| Slower stats interval (T-09) | ✅ | The agent reports every 15 s instead of 3 s, and reads battery and network (PowerShell each time) every 2 minutes instead of 30 s. At the HP, no report arrived for 10 s after the change, and this PC stayed online throughout |
+| No animations while a game runs (T-09) | ✅ | The interface takes the low-resource class: no animations, transitions or blur behind glass panels, and the login background stops changing |
+| Back to normal when the game ends | ✅ | A report straight away, then every 3 s again; the interface moves again |
+| Always on, Off, and the tray | ✅ | Always on: on without a game, and the watcher stops. Off: stays off with a game running. The tray's Low-resource mode menu shows and changes the same choice, kept in `prefs.json` |
+| The watcher ends with the tool | ✅ | Quit from the tray: its process ended too. It uses about 16 MB of memory and no CPU between checks |
+
+Tests: `low-resource-test.mjs` 16/16 on the development build and on the packaged app. Also `node --test "agent/*.test.js"` 46/46, `node --test "server/*.test.js"` 148/148, `tray-test.mjs` 19/19, `shortcuts-test.mjs` 12/12, `mode-test.mjs` 14/14, `smoke-test.mjs` (0 console errors), `discovery-test.mjs` 13/13, `pairing-test.mjs` 19/19, `live-stats-test.mjs` 17/17, `send-test.mjs` 19/19 and `transfers-test.mjs` 17/17.
+
+Found during the run:
+- **A maximized window looked like a game.** With the taskbar hidden, a maximized window covers the screen exactly like a full-screen one. Maximized windows don't count now; games and full-screen video aren't maximized windows.
+- **The tray test could read the page before its bridge was ready** after a hidden start. It waits now.
+
+For the final pass on the real machines: on the ROG Ally, start a Steam game and a Game Pass game (full screen), and check the tray says low-resource mode is on, and the HP's Devices view still shows the Ally online.
+
 ## Problems found and fixed during the run
 
 1. **Focus after navigation:** after opening a folder or tab, keyboard focus fell back to the top of the page, so you had to Tab through the header again. It now moves into the new content.

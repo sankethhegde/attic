@@ -12,6 +12,8 @@ const path = require('path');
 // seen: the newest HP event already shown, per server, so a restart catches up without repeats.
 // 3-3: inboxDir, the Hub Inbox folder chosen in Settings (null: the default in Downloads), and
 // explorerMenu, "Send to Attic Hub" in File Explorer's right-click menu (on for a client).
+// 3-4: lowResource, the ROG Ally's low-resource mode: 'auto' (while a game runs), 'on' or 'off'.
+// A client is on 'auto'; the server sends no stats from an agent, so it's 'off' there.
 const NOTIFY = ['received', 'transfers', 'devices'];
 const defaults = mode => ({
   startWithWindows: mode !== 'server',
@@ -19,8 +21,10 @@ const defaults = mode => ({
   trayHintShown: false,
   seen: {},
   inboxDir: null,
-  explorerMenu: mode !== 'server'
+  explorerMenu: mode !== 'server',
+  lowResource: mode === 'server' ? 'off' : 'auto'
 });
+const LOW = ['auto', 'on', 'off'];
 
 function store(file) {
   const read = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch (e) { return {}; } };
@@ -42,7 +46,8 @@ function store(file) {
         trayHintShown: typeof patch.trayHintShown === 'boolean' ? patch.trayHintShown : cur.trayHintShown,
         seen,
         inboxDir: patch.inboxDir === null || typeof patch.inboxDir === 'string' ? patch.inboxDir : cur.inboxDir,
-        explorerMenu: typeof patch.explorerMenu === 'boolean' ? patch.explorerMenu : cur.explorerMenu
+        explorerMenu: typeof patch.explorerMenu === 'boolean' ? patch.explorerMenu : cur.explorerMenu,
+        lowResource: LOW.includes(patch.lowResource) ? patch.lowResource : cur.lowResource
       };
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file + '.tmp', JSON.stringify(next, null, 2));
