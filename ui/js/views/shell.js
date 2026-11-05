@@ -5,7 +5,7 @@
   const { util: U, ui } = A;
 
   const TABS = [
-    { id: 'dashboard', label: 'Dashboard', icon: 'database', master: true },
+    { id: 'dashboard', label: 'Dashboard', short: 'Home', icon: 'database', master: true },
     { id: 'files', label: 'Files', icon: 'folder' },
     { id: 'photos', label: 'Photos', icon: 'photo' },
     { id: 'videos', label: 'Videos', icon: 'video' },
@@ -38,7 +38,7 @@
       </header>
       <div class="mobile-search" id="msearch"><div class="search"><label class="sr-only" for="search-m">Search</label>${U.icon('search')}<input id="search-m" type="search" placeholder="Search" autocomplete="off"></div></div>
       <nav class="tabs" aria-label="Sections">
-        ${tabs.map(t => `<a class="tab" href="#/${t.id}" data-tab="${t.id}">${U.icon(t.icon)}<span>${t.label}</span></a>`).join('')}
+        ${tabs.map(t => `<a class="tab" href="#/${t.id}" data-tab="${t.id}"${t.short ? ` aria-label="${t.label}"` : ''}>${U.icon(t.icon)}${t.short ? `<span class="tl-long">${t.label}</span><span class="tl-short" aria-hidden="true">${t.short}</span>` : `<span>${t.label}</span>`}</a>`).join('')}
       </nav>
       <main class="main" id="main" tabindex="-1"></main>
     </div>`;

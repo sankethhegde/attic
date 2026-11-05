@@ -215,8 +215,8 @@
       const avail = s ? s.shares.filter(x => x.available) : [];
       el.innerHTML = `
         <div class="card-head"><h2 id="up-h">Upload</h2></div>
-        <div class="drop" id="drop">${U.icon('upload')}<p>Drag files here, or</p>
-          <button class="btn btn-secondary" id="browse">Browse files</button><input type="file" id="pick" multiple hidden></div>
+        <div class="drop" id="drop">${U.icon('upload')}<p class="desktop-only">Drag files here, or</p>
+          <button class="btn btn-secondary" id="browse">${ui.handheld ? 'Choose photos or files' : 'Browse files'}</button><input type="file" id="pick" multiple hidden></div>
         <div class="dest"><label for="dshare">To</label><select class="plain-select" id="dshare">${avail.map(x => `<option value="${x.id}">${U.esc(x.name)}</option>`).join('')}</select>
           <label for="dfolder" class="sr-only">Folder</label><select class="plain-select" id="dfolder" style="max-width:240px"><option value="">(top level)</option></select>
           <span class="grow"></span>${queue.length ? '<button class="btn btn-ghost btn-sm" id="clearq">Clear finished</button>' : ''}</div>

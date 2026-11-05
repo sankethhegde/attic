@@ -246,6 +246,16 @@
     async getPairing() {
       return http('GET', '/api/pairing');
     },
+    // The HP's HTTPS (Phase 4, 4-1): { caFingerprint, httpsPort, names, validUntil, caUrl, profileUrl },
+    // public, so a phone can fetch it before it trusts the secure address. null if the HP has no HTTPS.
+    async getTls() {
+      try { return await http('GET', '/api/tls'); } catch (e) { return null; }
+    },
+    // The same interface at the HP's secure address, or null (already there, or no HTTPS).
+    secureUrl(tls) {
+      if (!tls || !tls.httpsPort || location.protocol === 'https:') return null;
+      return `https://${location.hostname}:${tls.httpsPort}/`;
+    },
 
     // Trade the code the master was shown for this device's identity. The HP keeps the token in an
     // HttpOnly cookie, so nothing here ever sees it.

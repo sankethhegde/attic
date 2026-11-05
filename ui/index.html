@@ -4,8 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Attic Hub</title>
-  <meta name="description" content="Attic Hub — home file server and device hub. Phase 1B: desktop tool on mock data.">
+  <meta name="description" content="Attic Hub — your home file server and devices, from the HP on your home Wi-Fi.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <!-- The Home Screen app (Phase 4, 4-1): Safari's Share → Add to Home Screen opens it full screen. -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="assets/app-icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Attic">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#171a21" media="(prefers-color-scheme: dark)">
+  <meta name="format-detection" content="telephone=no">
   <!-- Manrope if online; the system font stack takes over offline. Loaded without blocking, so the app
        never waits on the internet to start (media="print" defers it until onload switches it on). -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
