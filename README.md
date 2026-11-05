@@ -50,6 +50,7 @@ Electron's binary download is an install script, which npm may hold for approval
 | `node scripts/mode-test.mjs [exe]` | The 3-1 flow: the first-launch choice, Client remembered, Server set up new (and an existing folder checked), started without installing, opened as the HP, stopped. With an exe, also runs it the way the Windows startup task does |
 | `node scripts/tray-test.mjs [exe]` | The 3-2 flow: the tray and its menu, closing to the tray, a received file's notification (one for several), the HP's events (delivered, failed, offline, online), switching them off, catching up after a restart, `--hidden`. With an exe, also switches the real start-with-Windows entry on and off |
 | `node scripts/shortcuts-test.mjs [exe]` | The 3-3 flow: choosing the Hub Inbox folder, "Send to Attic Hub" launches (a file and a folder) making one Send dialog and sending by path, Retry by path, dropping a file on the window, the Dashboard's Upload keeping its drops. With an exe, also adds and removes the real right-click entry |
+| `node scripts/low-resource-test.mjs [exe]` | The 3-4 flow: low-resource mode on Automatic, turned on by a Steam game (a test registry key, never Steam's) and by a real full-screen window, with reports slowing at the HP and the interface holding still; Always on, Off, the tray's choice, and the game watcher ending with the tool |
 | `node scripts/serve-ui.js` | Serves `ui/` on localhost, to check it in a normal browser |
 
 ## First run
@@ -80,6 +81,12 @@ The installed tool carries the whole server (`resources\server`) and runs it wit
 - **The Hub Inbox folder** is chosen in Settings → Server → Hub Inbox (Change folder, or Use the default). The next file goes there; files already received stay where they are.
 - **Right-click "Send to Attic Hub"** in File Explorer works on files and folders (on Windows 11, under Show more options). It opens the Send dialog with them. Picking several makes one dialog, and a folder goes as its files. The tool sends them by their paths, and Retry can send them again the same way. The entry is per user (no Administrator), switchable in Settings → This PC, and removed on uninstall.
 - **Dropping files or folders** anywhere on the window opens the Send dialog. The Dashboard's Upload area still uploads to the HP. Windows doesn't let a program take drops on its tray icon, so the tray isn't a drop target.
+
+**Low-resource mode, for the ROG Ally** (3-4). In Settings → This PC and in the tray:
+- **Automatic** (a client's default) turns it on while a Steam game runs or a full-screen app is in front. A maximized window doesn't count.
+- **Always on** and **Off** don't watch for games at all.
+- **While it's on**, this PC reports its stats every 15 seconds instead of every 3, and reads battery and network every 2 minutes. It stays online at the HP. Attic Hub's window holds still: no animations, transitions, blur or changing login background.
+- **When the game ends**, everything is back to normal at once.
 
 On a fresh server the interface shows setup for the master account, with a password you choose. The master then adds an account for each device from the Dashboard.
 

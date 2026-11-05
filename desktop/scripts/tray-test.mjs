@@ -144,7 +144,8 @@ try {
   check('the HP’s own “file received” events don’t show a second time', doubled === 0, `${doubled} duplicates`);
 
   // 3b. The HP's events (its side of 3-2): a file this PC sent is delivered, or fails.
-  const waitNote = async (re, since, ms = 15000) => { for (let i = 0; i < ms / 250; i++) { const n = (await T('notes')).slice(since).find(x => re.test(x.title)); if (n) return n; await sleep(250); } return null; };
+  // Right after a start the page may not have its bridge yet (an error, not a list): keep waiting.
+  const waitNote = async (re, since, ms = 15000) => { for (let i = 0; i < ms / 250; i++) { const all = await T('notes'); const n = Array.isArray(all) && all.slice(since).find(x => re.test(x.title)); if (n) return n; await sleep(250); } return null; };
   const sendFromTool = name => ev(`const d = (await Attic.api.listHubDevices()).find(x => x.name === 'ROG Ally');
     const t = await Attic.api.sendToDevice({ files: [{ name: '${name}', size: 2048, source: new File([new Uint8Array(2048)], '${name}') }], to: d }).promise; return t[0].id`);
   const allyFetch = tid => new Promise((resolve, reject) => http.get({ host: LAN, localAddress: LAN, port: HTTP_PORT, path: `/api/transfers/${tid}/file`, headers: { 'X-Attic-Device': jars.ally.attic_device } },

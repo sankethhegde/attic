@@ -96,6 +96,12 @@
       this.layers = []; this.stage = null;
     }
   };
+  // Low-resource mode (3-4) turned on or off: stop or restart the slideshow and its slow zoom.
+  root.addEventListener('attic:low-resource', () => {
+    if (!engine.stage) return;
+    engine.layers.forEach(l => l.classList.toggle('zoom', l.classList.contains('on') && !ui.reducedMotion()));
+    engine.schedule();
+  });
 
   // ---------- picker (login corner + Settings) ----------
   async function renderPicker(host, opts) {

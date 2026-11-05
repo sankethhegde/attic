@@ -76,6 +76,8 @@
           <div class="ctl"><label class="check"><input type="checkbox" id="pc-notify-devices"> On</label></div></div>
         <div class="set-row" data-client><div class="lbl">“Send to Attic Hub” in File Explorer<small id="pc-explorer-hint">Right-click files or a folder, then Send to Attic Hub (on Windows 11, under Show more options). Dropping files on this window works too.</small></div>
           <div class="ctl"><label class="check"><input type="checkbox" id="pc-explorer"> On</label></div></div>
+        <div class="set-row" data-client><div class="lbl">Low-resource mode<small>For the ROG Ally. While it’s on, this PC reports its stats every 15 seconds instead of every 3, and this window holds still: no animations or blur. Automatic turns it on while a Steam game runs or a full-screen app is in front. <span id="pc-low-now" role="status"></span></small></div>
+          <div class="ctl">${seg('low', [['auto', 'Automatic'], ['on', 'Always on'], ['off', 'Off']], null, 'Low-resource mode')}</div></div>
       </section>` : ''}
 
       ${master ? `
@@ -223,6 +225,31 @@
         note.onchange = async () => { show(await root.atticDesktop.prefs.set({ notifyReceived: note.checked })); ui.toast(note.checked ? 'You’ll be notified when files arrive' : 'No notifications for received files'); };
         noteT.onchange = async () => { show(await root.atticDesktop.prefs.set({ notifyTransfers: noteT.checked })); ui.toast(noteT.checked ? 'You’ll hear how files you send get on' : 'No notifications for files you send'); };
         noteD.onchange = async () => { show(await root.atticDesktop.prefs.set({ notifyDevices: noteD.checked })); ui.toast(noteD.checked ? 'You’ll hear when devices go and come back' : 'No notifications about devices'); };
+        // 3-4: low-resource mode's choice, and whether it's on right now (live, as games start and stop).
+        const lowNow = main.querySelector('#pc-low-now');
+        const LOW_WHY = { steam: 'a Steam game is running', fullscreen: 'a full-screen app is in front' };
+        const showLow = l => {
+          if (!lowNow.isConnected) return root.removeEventListener('attic:low-state', onLow);
+          if (!l) return;
+          main.querySelectorAll('[data-low]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.low === l.pref)));
+          let text;
+          if (l.detect === 'unavailable' && l.pref === 'auto') text = l.problem || 'Attic Hub can’t tell when a game runs on this PC. Choose Always on instead.';
+          else if (l.active && l.reason === 'on') text = 'On now.';
+          else if (l.active) text = `On now: ${LOW_WHY[l.reason] || 'a game is running'}${l.app ? ` (${l.app})` : ''}.`;
+          else text = l.pref === 'off' ? '' : 'Off now: no game is running.';
+          lowNow.textContent = text;
+          lowNow.dataset.active = l.active ? '1' : '0';
+        };
+        const onLow = ev => showLow(ev.detail); // ui.js passes the tool's updates on as this event
+        if (root.atticDesktop.lowResource) {
+          root.atticDesktop.lowResource.get().then(showLow).catch(() => {});
+          root.addEventListener('attic:low-state', onLow);
+          main.querySelectorAll('[data-low]').forEach(b => b.onclick = async () => {
+            await root.atticDesktop.prefs.set({ lowResource: b.dataset.low });
+            showLow(await root.atticDesktop.lowResource.get());
+            ui.toast({ auto: 'Low-resource mode turns on while a game runs', on: 'Low-resource mode is on', off: 'Low-resource mode is off' }[b.dataset.low]);
+          });
+        }
         explorerBox.onchange = async () => { show(await root.atticDesktop.prefs.set({ explorerMenu: explorerBox.checked })); ui.toast(explorerBox.checked ? '“Send to Attic Hub” is in File Explorer' : '“Send to Attic Hub” is gone from File Explorer'); };
       }
     }

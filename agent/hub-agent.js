@@ -7,6 +7,10 @@
 // Uses the WebSocket built into Node and Electron, which can send the header.
 // From 2-4 the HP also tells the agent about files sent to this PC ("inbox", "transfer",
 // "transfer-cancelled"); those go to `onMessage`, which hands them to receiver.js.
+// 3-4 (T-09): `pace(interval)` may stretch the HP's interval (low-resource mode while a game runs); it's
+// read before every report, and `nudge()` reports at once and picks the new pace up straight away.
+// The HP decides online from the connection's ping, not from how often reports come, so a slower pace
+// keeps the device online.
 'use strict';
 
 const BACKOFF = [1000, 2000, 4000, 8000, 15000, 30000];
@@ -15,8 +19,8 @@ function hubUrl(server) { return `ws://${server.address}:${server.port}/api/hub?
 
 // opts: { url, token, collect, onState(state, detail), onMessage(msg), WebSocketImpl }
 // States: 'connecting', 'reporting', 'retrying' (detail: ms until the next try), 'unpaired', 'replaced', 'stopped'.
-function createAgent({ url, token, collect, onState = () => {}, onMessage = () => {}, WebSocketImpl = globalThis.WebSocket, backoff = BACKOFF }) {
-  let ws = null, timer = 0, retry = 0, tries = 0, stopped = false, state = null, sending = false;
+function createAgent({ url, token, collect, onState = () => {}, onMessage = () => {}, WebSocketImpl = globalThis.WebSocket, backoff = BACKOFF, pace = ms => ms }) {
+  let ws = null, timer = 0, retry = 0, tries = 0, stopped = false, state = null, sending = false, kick = null;
   const set = (s, detail) => { state = s; onState(s, detail); };
 
   function connect() {
@@ -48,6 +52,7 @@ function createAgent({ url, token, collect, onState = () => {}, onMessage = () =
 
   function loop(interval, mine) {
     const tick = async () => {
+      clearTimeout(timer);
       if (stopped || ws !== mine) return;
       if (!sending) {
         sending = true;
@@ -57,8 +62,9 @@ function createAgent({ url, token, collect, onState = () => {}, onMessage = () =
         } catch (e) { /* a failed reading skips one report */ }
         sending = false;
       }
-      timer = setTimeout(tick, interval);
+      timer = setTimeout(tick, Math.max(1000, Number(pace(interval)) || interval));
     };
+    kick = tick;
     tick();
   }
 
@@ -72,6 +78,8 @@ function createAgent({ url, token, collect, onState = () => {}, onMessage = () =
   connect();
   return {
     get state() { return state; },
+    // Report now, then carry on at the current pace (3-4: low-resource mode turned on or off).
+    nudge() { if (kick && state === 'reporting') kick(); },
     stop() {
       stopped = true;
       clearTimeout(timer); clearTimeout(retry);

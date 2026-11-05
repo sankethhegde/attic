@@ -812,6 +812,13 @@ h1, h2, h3 { margin: 0; }
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
   .bg-layer.zoom { animation: none !important; }
 }
+/* Low-resource mode (3-4, T-09), while a game runs on the ROG Ally: the same stillness, and no blur
+   behind glass panels either, since that's redrawn on the GPU. The panels are nearly opaque without it. */
+.low-resource *, .low-resource *::before, .low-resource *::after {
+  animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important;
+  scroll-behavior: auto !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+}
+.low-resource .bg-layer.zoom { animation: none !important; }
 
 /* ---------- phones ---------- */
 @media (max-width: 720px) {
