@@ -75,7 +75,6 @@
       <div class="panel-actions">
         <a class="btn btn-secondary" href="${U.esc(api.downloadUrl(e))}" download="${U.esc(e.name)}">${U.icon('download')}Download</a>
         <button class="btn btn-secondary" id="send-dev">${U.icon('transfer')}Send to device</button>
-        <span class="tip" data-tip="Deleting arrives in Phase 2" tabindex="0"><button class="btn btn-secondary" disabled>${U.icon('trash')}Delete</button></span>
       </div></aside>`;
   }
 
@@ -190,9 +189,12 @@
       const total = good.reduce((n, f) => n + f.size, 0), done = new Map();
       const label = upBtn.querySelector('span');
       upBtn.disabled = true;
-      const results = await Promise.allSettled(good.map(f => api.upload(shareId, path, f, p => {
+      // 4-2: big files go in pieces and carry on after a drop; meanwhile the button says it's waiting.
+      const paused = new Set();
+      const results = await Promise.allSettled(good.map(f => api.upload(shareId, path, f, (p, st) => {
         done.set(f, p * f.size);
-        label.textContent = Math.floor([...done.values()].reduce((a, b) => a + b, 0) / total * 100) + '%';
+        if (st && st.paused) paused.add(f); else paused.delete(f);
+        label.textContent = paused.size ? 'Waiting…' : Math.floor([...done.values()].reduce((a, b) => a + b, 0) / total * 100) + '%';
       }).promise));
       upBtn.disabled = false;
       label.textContent = 'Upload';
@@ -213,7 +215,7 @@
       main.querySelector('#fcount').textContent = (q || (master && ts.owner)) ? `${items.length} of ${data.items.length} items` : `${nF ? nF + (nF === 1 ? ' folder, ' : ' folders, ') : ''}${items.length - nF} ${items.length - nF === 1 ? 'file' : 'files'}`;
       if (vl) { vl.destroy(); vl = null; }
       if (!data.items.length) {
-        body.innerHTML = ui.empty({ icon: 'folder', title: 'This folder is empty', text: 'It loaded fine — there’s just nothing in it yet. Uploads arrive in Phase 2.' });
+        body.innerHTML = ui.empty({ icon: 'folder', title: 'This folder is empty', text: 'Nothing in it yet. Upload adds files here.' });
         return;
       }
       if (!items.length) {

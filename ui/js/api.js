@@ -31,8 +31,7 @@
     devicesView: 'list',
     otherView: 'list',
     photoSize: 'm',
-    thisDevice: null, // null = detect automatically; otherwise phone | tablet | laptop | desktop
-    dev: { failRate: 0 }
+    thisDevice: null // null = detect automatically; otherwise phone | tablet | laptop | desktop
   };
 
   class ApiError extends Error {
@@ -41,7 +40,7 @@
 
   // ---------- server ----------
   // The session lives in an HttpOnly cookie this code never sees. `me` is what the server last said about
-  // it; `known` is the account list the mock reads for owners and devices (all accounts for the master,
+  // it; `known` is the account list used for owners and devices (all accounts for the master,
   // just your own for a device).
   let me = null, known = [];
 
@@ -88,19 +87,8 @@
   function settings() {
     const s = read(K.settings, {});
     return Object.assign(clone(DEFAULT_SETTINGS), s, {
-      background: Object.assign({}, DEFAULT_SETTINGS.background, s.background),
-      dev: Object.assign({}, DEFAULT_SETTINGS.dev, s.dev)
+      background: Object.assign({}, DEFAULT_SETTINGS.background, s.background)
     });
-  }
-
-  // Simulated latency, plus an on-demand failure rate so error paths get exercised.
-  function delay(canFail) {
-    const ms = 100 + Math.random() * 200;
-    const rate = settings().dev.failRate || 0;
-    return new Promise((resolve, reject) => setTimeout(() => {
-      if (canFail && Math.random() < rate) reject(new ApiError('SIMULATED', 'Couldn’t reach the server. Try again.'));
-      else resolve();
-    }, ms));
   }
 
   // ---------- the file index (the HP's: milestone 6) ----------
@@ -194,9 +182,107 @@
   // from this device, { entry } for one on the HP. Uploads in flight, by id, so Cancel can stop them.
   const sentFiles = new Map(), uploads = new Map();
 
+  // ---------- resumable uploads (Phase 4, 4-2: the HP's /api/uploads) ----------
+  // A big file (a phone's video) goes up in pieces, so a dropped Wi-Fi, a locked screen or Safari going to
+  // the background doesn't lose it. After a failure it waits (longer each time, or until the connection
+  // or the page is back), asks the HP where it got to, and carries on from there. Meanwhile the screen
+  // is kept on where the browser allows it (Screen Wake Lock). `resumable.over`: files bigger than this
+  // go in pieces; smaller ones in one request, as before. `resumable.chunk`: null means the HP's
+  // suggestion (8 MB). Both can be changed by tests.
+  const resumable = { over: 16 * 1024 * 1024, chunk: null, maxTries: 40 };
+  const RETRYABLE = new Set(['UNREACHABLE', 'OFFSET', 'BUSY', 'CANCELLED_PIECE', 'SERVER_BUSY']);
+  let wake = null, wakeUsers = 0;
+  async function keepAwake(on) {
+    wakeUsers = Math.max(0, wakeUsers + (on ? 1 : -1));
+    try {
+      if (wakeUsers && !wake && root.navigator.wakeLock && document.visibilityState === 'visible') {
+        wake = await root.navigator.wakeLock.request('screen');
+        wake.addEventListener('release', () => { wake = null; });
+      } else if (!wakeUsers && wake) { const w = wake; wake = null; await w.release(); }
+    } catch (e) { /* not allowed here: the upload still resumes after the screen locks */ }
+  }
+  document.addEventListener('visibilitychange', () => { if (wakeUsers && document.visibilityState === 'visible') { wakeUsers--; keepAwake(true); } });
+  // Waits before another try: 1, 2, 4… up to 15 s, or sooner when the connection or the page comes back.
+  function waitToRetry(n) {
+    return new Promise(resolve => {
+      const done = () => { clearTimeout(t); root.removeEventListener('online', done); document.removeEventListener('visibilitychange', vis); resolve(); };
+      const vis = () => { if (document.visibilityState === 'visible') done(); };
+      const t = setTimeout(done, Math.min(15000, 1000 * 2 ** Math.min(n - 1, 4)));
+      root.addEventListener('online', done);
+      document.addEventListener('visibilitychange', vis);
+    });
+  }
+  // One piece, with progress inside it. Rejects with an ApiError carrying `status` and, for 409, `offset`.
+  function putPiece(id, offset, blob, onLoaded, track) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      track(xhr);
+      xhr.open('PUT', `/api/uploads/${encodeURIComponent(id)}?offset=${offset}`);
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.setRequestHeader('X-Attic-Upload', '1');
+      xhr.upload.onprogress = e => onLoaded(e.loaded);
+      xhr.onload = () => {
+        let data = null;
+        try { data = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
+        if (xhr.status === 200 && data) return resolve(data);
+        let code = (data && data.code) || 'SERVER';
+        if (code === 'CANCELLED') code = 'CANCELLED_PIECE'; // the HP saw the piece cut off: carry on
+        if (xhr.status >= 500 && xhr.status !== 507) code = 'SERVER_BUSY';
+        reject(Object.assign(new ApiError(code, (data && data.message) || 'The upload failed.'), { status: xhr.status, offset: data && data.offset }));
+      };
+      xhr.onerror = () => reject(Object.assign(new ApiError('UNREACHABLE', 'Could not reach the server.'), { status: 0 }));
+      xhr.onabort = () => reject(new ApiError('CANCELLED', 'Cancelled'));
+      xhr.send(blob);
+    });
+  }
+  // start: { shareId, folder, name, size } (into Files) or { transferId } (a send). onProgress(bytesDone, { paused }).
+  // → { promise (the HP's result: the file's entry, or the transfer, now queued), cancel }
+  function resumableUpload(start, file, onProgress = () => {}) {
+    let xhr = null, cancelled = false, sessionId = null;
+    const promise = (async () => {
+      await keepAwake(true);
+      try {
+        const s = await http('POST', '/api/uploads', start);
+        sessionId = s.id;
+        if (s.done) return s.result; // an empty file
+        let offset = s.offset || 0, tries = 0;
+        const piece = Math.min(resumable.chunk || s.chunkSize || 8388608, s.maxChunk || 67108864);
+        for (;;) {
+          if (cancelled) throw new ApiError('CANCELLED', 'Cancelled');
+          const end = Math.min(file.size, offset + piece);
+          try {
+            const at = offset;
+            const r = await putPiece(sessionId, at, file.slice(at, end), loaded => onProgress(at + loaded, { paused: false }), x => { xhr = x; });
+            tries = 0;
+            offset = r.offset;
+            onProgress(offset, { paused: false });
+            if (r.done) return r.result;
+          } catch (e) {
+            if (cancelled || e.code === 'CANCELLED') throw new ApiError('CANCELLED', 'Cancelled');
+            if (Number.isSafeInteger(e.offset)) { offset = e.offset; continue; } // the HP says where it is
+            if (!RETRYABLE.has(e.code) || ++tries > resumable.maxTries) throw e;
+            onProgress(offset, { paused: true });
+            await waitToRetry(tries);
+            try { offset = (await http('GET', '/api/uploads/' + encodeURIComponent(sessionId))).offset; }
+            catch (err) { if (err.code === 'NOT_FOUND') throw err; /* still unreachable: try the piece again */ }
+          }
+        }
+      } finally { keepAwake(false); }
+    })();
+    return {
+      promise,
+      cancel() {
+        cancelled = true;
+        if (xhr) xhr.abort();
+        if (sessionId) http('DELETE', '/api/uploads/' + encodeURIComponent(sessionId), {}).catch(() => {});
+      }
+    };
+  }
+
   // Streams `body` as transfer `id`'s file. XMLHttpRequest rather than fetch: only it reports upload
-  // progress. → { promise (the transfer, now queued), cancel }
+  // progress. A big file goes in resumable pieces (4-2). → { promise (the transfer, now queued), cancel }
   function putTransferFile(id, body, onProgress) {
+    if (body.size > resumable.over) return resumableUpload({ transferId: id }, body, (n, st) => onProgress(n, st));
     const xhr = new XMLHttpRequest();
     return {
       cancel() { xhr.abort(); },
@@ -238,6 +324,7 @@
   // =====================================================================
   const api = {
     ApiError,
+    resumable, // 4-2: when files go up in pieces (tests make the pieces small)
     MAX_CUSTOM_BG,
     MAX_BG_BYTES,
 
@@ -413,7 +500,7 @@
 
     // ---------- files (real, from the HP: milestone 4) ----------
     // The server sends what the disk knows; type and category are worked out here, exactly as the
-    // mock did, so every screen sees the same shape. Until milestone 5 every real file is the master's.
+    // browser version did, so every screen sees the same shape. Until milestone 5 every real file is the master's.
     async listFolder(shareId, path) {
       const q = path ? '?path=' + encodeURIComponent(path) : '';
       const data = await http('GET', `/api/shares/${encodeURIComponent(shareId)}/folder${q}`);
@@ -673,7 +760,7 @@
           current = await http('POST', '/api/transfers', { to: to.id, fileName: f.name, size: body.size });
           // Kept for this session, so Retry can send it again without asking (a file on the HP is re-read).
           sentFiles.set(current.id, f.source ? { file: f.source } : { entry: f.entry });
-          job = putTransferFile(current.id, body, loaded => onProgress({ phase: 'upload', name: f.name, loaded: done + loaded, total }));
+          job = putTransferFile(current.id, body, (loaded, st) => onProgress({ phase: 'upload', name: f.name, loaded: done + loaded, total, paused: !!(st && st.paused) }));
           uploads.set(current.id, job);
           try { out.push(await job.promise); } finally { uploads.delete(current.id); }
           current = null;
@@ -704,6 +791,11 @@
     // rather than fetch: only it reports upload progress. The uploader owns the file; a name that's
     // taken comes back as "name (1).ext". Resolves with the stored entry.
     upload(shareId, folder, file, onProgress) {
+      // A big file (a phone's video) goes in resumable pieces (4-2). onProgress(fraction, { paused }).
+      if (file.size > resumable.over) {
+        const job = resumableUpload({ shareId, folder: folder || '', name: file.name, size: file.size }, file, (n, st) => onProgress(file.size ? n / file.size : 1, st));
+        return { cancel: job.cancel, promise: job.promise.then(r => { forgetIndex(); return r; }) };
+      }
       const xhr = new XMLHttpRequest();
       return {
         cancel() { xhr.abort(); },
@@ -728,12 +820,10 @@
 
     // ---------- settings ----------
     async getSettings() {
-      await delay(false);
       return settings();
     },
 
     async updateSettings(patch) {
-      await delay(false);
       const s = settings();
       for (const k in patch) {
         if (patch[k] && typeof patch[k] === 'object' && !Array.isArray(patch[k])) s[k] = Object.assign({}, s[k], patch[k]);
@@ -745,7 +835,6 @@
 
     // ---------- backgrounds ----------
     async listBackgrounds() {
-      await delay(false);
       let custom = [];
       try {
         custom = (await idb.all()).sort((a, b) => a.addedAt.localeCompare(b.addedAt))
@@ -755,7 +844,6 @@
     },
 
     async addBackground(file) {
-      await delay(false);
       if (!BG_TYPES.includes(file.type)) throw new ApiError('TYPE', `${file.name} isn’t a JPG, PNG or WebP image.`);
       if (file.size > MAX_BG_BYTES) throw new ApiError('TOO_LARGE', `${file.name} is ${U.formatBytes(file.size)}. Images must be 5 MB or smaller.`);
       const existing = await idb.all().catch(() => []);
@@ -767,7 +855,6 @@
     },
 
     async removeBackground(id) {
-      await delay(false);
       if (id.startsWith('b:')) throw new ApiError('FORBIDDEN', 'Bundled images can’t be removed.');
       await idb.remove(id);
       const s = settings();
@@ -783,7 +870,6 @@
     },
 
     async importSettings(data) {
-      await delay(false);
       if (!data || data.app !== 'Attic' || data.kind !== 'settings') throw new ApiError('INVALID', 'That file isn’t an Attic settings export.');
       if (data.settings) write(K.settings, Object.assign(clone(DEFAULT_SETTINGS), data.settings));
     },

@@ -65,7 +65,7 @@
         <h3 class="send-h">What</h3>
         <div id="sd-what"></div>
         ${!pickable ? '' : `<div class="send-pick">
-          <button type="button" class="btn btn-secondary btn-sm" id="sd-files">${U.icon('file')}Choose files</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="sd-files">${ui.handheld ? `${U.icon('photo')}Choose photos or files` : `${U.icon('file')}Choose files`}</button>
           <button type="button" class="btn btn-secondary btn-sm desktop-only" id="sd-folder">${U.icon('folder')}Choose a folder</button>
           <input type="file" id="sd-in-files" multiple hidden>
           <input type="file" id="sd-in-folder" webkitdirectory hidden>
@@ -158,7 +158,9 @@
         files, to,
         onProgress: p => {
           const pct = p.total ? Math.min(100, p.loaded / p.total * 100) : 100;
-          bar.innerHTML = `<div class="send-progress-top"><span>${p.phase === 'fetch' ? `Reading ${U.esc(p.name)} from the HP…` : `Sending ${U.esc(p.name)} to the HP…`}</span>
+          // 4-2: a big file goes in pieces; after a drop (Wi-Fi, a locked screen) it waits, then carries on.
+          bar.innerHTML = `<div class="send-progress-top"><span>${p.paused ? `Waiting for the connection… ${U.esc(p.name)} carries on by itself.`
+            : p.phase === 'fetch' ? `Reading ${U.esc(p.name)} from the HP…` : `Sending ${U.esc(p.name)} to the HP…`}</span>
             <span class="mono">${U.formatBytes(p.loaded)} of ${U.formatBytes(p.total)}</span></div>
             <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}" aria-label="Sending"><span style="width:${pct.toFixed(1)}%"></span></div>`;
         }

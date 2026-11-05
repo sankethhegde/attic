@@ -7,8 +7,8 @@
   // Under the form: whether the connection is encrypted (Phase 4, 4-1: the HP's HTTPS). On a phone over
   // http, the steps to trust the HP once and move to its secure address (filled in by secureHint()).
   const HTTP_NOTE = () => location.protocol === 'https:'
-    ? `<p class="mock-note">${U.icon('lock')}<span>Encrypted with the HP’s own certificate.</span></p>`
-    : `<p class="mock-note">${U.icon('info')}<span>This connection isn’t encrypted. Sign in only on your home Wi-Fi.</span></p>`
+    ? `<p class="form-note">${U.icon('lock')}<span>Encrypted with the HP’s own certificate.</span></p>`
+    : `<p class="form-note">${U.icon('info')}<span>This connection isn’t encrypted. Sign in only on your home Wi-Fi.</span></p>`
       + (ui.handheld ? '<details class="secure-hint" hidden><summary>Use the secure address</summary><ol class="ph-steps"></ol><a class="btn btn-secondary btn-block" id="go-secure">Open the secure address</a></details>' : '');
   function secureHint(stage) {
     const d = stage.querySelector('.secure-hint');

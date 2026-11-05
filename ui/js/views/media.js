@@ -5,7 +5,7 @@
 
   const CONF = {
     photos: { title: 'Photos', noun: 'photo', icon: 'photo', empty: 'Photos from every share appear here, newest first, wherever they’re stored.' },
-    videos: { title: 'Videos', noun: 'video', icon: 'video', empty: 'Videos from every share appear here. Playback arrives in Phase 4.' },
+    videos: { title: 'Videos', noun: 'video', icon: 'video', empty: 'Videos from every share appear here.' },
     other: { title: 'Other', noun: 'file', icon: 'doc', empty: 'Documents, archives, audio and anything else that isn’t a photo or video.' }
   };
   const OTHER_GROUPS = [['documents', 'Documents'], ['archives', 'Archives'], ['audio', 'Audio'], ['other', 'Unknown']];

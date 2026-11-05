@@ -176,7 +176,7 @@
             <button data-dview="list" aria-pressed="${view === 'list'}">${U.icon('list')}<span>List</span></button>
             <button data-dview="grid" aria-pressed="${view === 'grid'}">${U.icon('grid')}<span>Grid</span></button></div>
           <button class="btn btn-primary btn-sm" id="add-dev">${U.icon('plus')}Add device</button></div>
-        <p class="muted" style="font-size:13px;margin:-6px 0 10px">Registered means the account exists — not that the device is online now. Live status arrives in Phase 1B.</p>
+        <p class="muted" style="font-size:13px;margin:-6px 0 10px">Registered means the account exists — not that the device is online now. Devices shows who’s online now.</p>
         ${list.length ? (view === 'grid' ? cards() : rows())
         : ui.empty({ icon: 'device', title: 'No devices yet', text: 'Give each phone, tablet or laptop its own account, so a lost one can be revoked on its own.' })}`;
       el.querySelectorAll('[data-dview]').forEach(b => b.onclick = async () => {
@@ -252,7 +252,7 @@
           queue.unshift(item);
           if (!item.error) {
             item.state = 'uploading';
-            const job = api.upload(dshare.value, dfolder.value, f, p => { item.progress = p; updateRow(item); });
+            const job = api.upload(dshare.value, dfolder.value, f, (p, st) => { item.progress = p; item.paused = !!(st && st.paused); updateRow(item); });
             item.cancel = job.cancel;
             job.promise.then(e => { item.state = 'done'; if (e && e.name !== item.name) item.savedAs = e.name; updateRow(item); })
               .catch(err => { item.state = err.code === 'CANCELLED' ? 'cancelled' : 'failed'; item.error = err.message; updateRow(item); });
@@ -262,7 +262,7 @@
       }
     }
     function rowHTML(q) {
-      const st = { uploading: Math.round(q.progress * 100) + '%', done: q.savedAs ? `Saved as ${q.savedAs}` : 'Saved', rejected: q.error, failed: q.error,
+      const st = { uploading: q.paused ? 'Waiting for the connection…' : Math.round(q.progress * 100) + '%', done: q.savedAs ? `Saved as ${q.savedAs}` : 'Saved', rejected: q.error, failed: q.error,
         cancelled: 'Cancelled', queued: 'Waiting' }[q.state];
       return `<span>${U.fileIcon({ kind: 'file', category: U.classify(q.name) })}</span>
         <span style="min-width:0"><span class="nm">${U.nameHTML(q.name)}</span><span class="c" style="display:block">to ${U.esc(q.dest)}</span></span>
@@ -312,7 +312,7 @@
       body: `<form id="dev-form" class="form-grid" novalidate>
         ${f('d-name', 'Display name (e.g. Pixel 8)')}${f('d-user', 'Username')}${f('d-pass', 'Password', 'password')}
         <div class="field no-icon"><select id="d-type">${['phone', 'tablet', 'laptop', 'desktop', 'other'].map(t => `<option value="${t}">${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}</select><label for="d-type">Device type</label><div class="field-msg"></div></div>
-        <p class="mock-note" style="margin-top:0">${U.icon('info')}<span>The device signs in with this password. Attic stores only a hash of it, so it can’t be shown again.</span></p></form>`,
+        <p class="form-note" style="margin-top:0">${U.icon('info')}<span>The device signs in with this password. Attic stores only a hash of it, so it can’t be shown again.</span></p></form>`,
       actions: [
         { label: 'Cancel' },
         { label: 'Add device', kind: 'primary', onClick: async (close, dlg) => {
