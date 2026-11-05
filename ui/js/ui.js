@@ -11,6 +11,34 @@
     <rect x="7.5" y="13.5" width="9" height="5" rx="1.2" fill="var(--accent-ink)"/></svg>`;
   ui.brand = () => `<div class="brand">${ui.mark()}<span class="brand-word">Attic</span></div>`;
 
+  // ---------- which kind of device (Phase 4, 4-1) ----------
+  // handheld: a phone or tablet's browser (not the desktop tool, even on the ROG Ally's touch screen).
+  // It can't choose a folder or drag files, so those actions are hidden (class "desktop-only").
+  // standalone: opened from the Home Screen, full screen, with no Safari address bar.
+  const nav = root.navigator || {};
+  ui.isIOS = /iPhone|iPad|iPod/.test(nav.userAgent || '') || (nav.platform === 'MacIntel' && nav.maxTouchPoints > 1);
+  ui.handheld = !root.atticDesktop && (ui.isIOS || root.matchMedia('(hover: none) and (pointer: coarse)').matches);
+  ui.standalone = nav.standalone === true || root.matchMedia('(display-mode: standalone)').matches;
+  ui.canPickFolder = !ui.handheld;
+  document.documentElement.classList.toggle('handheld', ui.handheld);
+  document.documentElement.classList.toggle('ios', ui.isIOS);
+  document.documentElement.classList.toggle('standalone', ui.standalone);
+
+  // The one-time steps for a phone to trust the HP's own certificate (the HP's README, "HTTPS for the
+  // iPhone"), as list items. tls: GET /api/tls.
+  ui.secureSteps = (tls) => {
+    const fp = tls && tls.caFingerprint ? ` Its fingerprint should be <span class="mono fp">${U.esc(tls.caFingerprint)}</span>.` : '';
+    const profile = U.esc((tls && tls.profileUrl) || '/api/tls/profile.mobileconfig');
+    return ui.isIOS || !ui.handheld ? `
+      <li><a href="${profile}" class="ph-profile">Download the HP’s profile</a>, and allow it.</li>
+      <li>In Settings → General → VPN &amp; Device Management, tap the Attic Hub profile, then Install.</li>
+      <li>In Settings → General → About → Certificate Trust Settings, turn on the Attic Hub CA.${fp}</li>
+      <li>Come back here and open the secure address.</li>` : `
+      <li><a href="${U.esc((tls && tls.caUrl) || '/api/tls/ca.cer')}" class="ph-profile">Download the HP’s certificate</a>.</li>
+      <li>In your phone’s security settings, install it as a CA certificate.${fp}</li>
+      <li>Come back here and open the secure address.</li>`;
+  };
+
   // ---------- theme ----------
   const mq = root.matchMedia('(prefers-color-scheme: dark)');
   let themePref = 'system';

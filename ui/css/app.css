@@ -326,7 +326,7 @@ h1, h2, h3 { margin: 0; }
 .share-card .top { display: flex; align-items: center; gap: 12px; }
 .share-card .icon-tile { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: var(--accent-tint); color: var(--accent); }
 .share-card .nm { font-weight: 800; font-size: 16px; }
-.share-card .path { font-size: 12.5px; color: var(--muted); }
+.share-card .path { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
 .share-card.unavailable { opacity: .6; filter: grayscale(1); }
 .share-card.unavailable:hover { transform: none; }
 .tag { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
@@ -874,4 +874,54 @@ h1, h2, h3 { margin: 0; }
   .hide-sm { display: none !important; }
   .seg button span { display: none; }
   .with-owner .list-head, .with-owner .row { grid-template-columns: 32px minmax(0, 1fr); }
+  /* Toasts sit above the tab bar, not on it. */
+  .toasts { bottom: calc(72px + env(safe-area-inset-bottom)); width: calc(100vw - 32px); }
+  .toast { max-width: 100%; }
 }
+
+/* ---------- the iPhone (Phase 4, 4-1) ---------- */
+/* Touch screens (the iPhone; the ROG Ally's screen when used by touch): every control at least 40-44 px,
+   and every text field at 16 px, below which Safari zooms the page in when one is tapped. */
+@media (pointer: coarse) {
+  .btn { height: 44px; }
+  .btn-sm { height: 40px; }
+  .seg button { height: 40px; min-width: 40px; padding: 0 12px; justify-content: center; }
+  .crumb { min-height: 40px; padding: 4px 8px; }
+  .link-btn { display: inline-flex; align-items: center; min-height: 40px; padding: 0 4px; }
+  .check { min-height: 44px; }
+  .check input { width: 22px; height: 22px; }
+  .header .home { min-height: 44px; }
+  .field input, .field select, .plain-input, .plain-select, input, select, textarea { font-size: 16px; }
+  .plain-input, .plain-select { height: 44px; }
+  .bg-remove { width: 40px; height: 40px; }
+  a, button, [role="button"], label { -webkit-tap-highlight-color: transparent; }
+}
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* As a Home Screen app the page runs under the status bar and around the rounded corners and the home
+   indicator (viewport-fit=cover, status bar "black-translucent"): keep content inside the safe area. */
+.header { height: calc(var(--header-h) + env(safe-area-inset-top)); padding-top: env(safe-area-inset-top);
+  padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+.stage { padding-top: max(24px, env(safe-area-inset-top)); padding-bottom: max(24px, env(safe-area-inset-bottom));
+  grid-template-columns: minmax(0, 1fr); } /* the card shrinks to the screen, rather than the screen scrolling sideways */
+@media (max-width: 720px) {
+  .header { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+  .tabs { padding-left: max(4px, env(safe-area-inset-left)); padding-right: max(4px, env(safe-area-inset-right)); }
+  /* Seven tabs on a phone: equal widths, so no label is squeezed out by a longer one. */
+  .tab { flex: 1 1 0; min-width: 0; }
+  .tab span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+@media (max-width: 420px) {
+  .tab { font-size: 10.5px; letter-spacing: -.1px; padding: 0 1px; }
+  .tab .tl-long { display: none; }
+}
+@media (max-width: 360px) { .tab { font-size: 9.5px; letter-spacing: -.2px; padding: 0; } .tabs { padding-left: 0; padding-right: 0; } }
+@media (min-width: 421px) { .tab .tl-short { display: none; } }
+/* Moving a phone to the HP's secure address: the steps, on the pairing and sign-in screens and in Settings. */
+.ph-steps { margin: 0; padding-left: 22px; display: grid; gap: 8px; font-size: 14px; color: var(--muted); }
+.ph-steps a { font-weight: 700; }
+.fp { word-break: break-all; font-size: 12px; }
+.secure-hint { margin-top: 10px; font-size: 14px; }
+.secure-hint summary { cursor: pointer; font-weight: 700; color: var(--accent); min-height: 40px; display: flex; align-items: center; }
+.secure-hint .ph-steps { margin: 6px 0 12px; }
+/* Things a phone can't do (choose a folder, drag files, build an installer). */
+.handheld .desktop-only { display: none !important; }

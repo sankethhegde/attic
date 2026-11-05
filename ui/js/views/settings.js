@@ -80,6 +80,19 @@
           <div class="ctl">${seg('low', [['auto', 'Automatic'], ['on', 'Always on'], ['off', 'Off']], null, 'Low-resource mode')}</div></div>
       </section>` : ''}
 
+      ${ui.handheld ? `
+      <section class="card" aria-labelledby="h-phone">
+        <h2 id="h-phone">This ${ui.isIOS ? 'iPhone' : 'phone'}</h2>
+        <div class="set-row" id="ph-secure-row"><div class="lbl">Secure connection<small id="ph-secure">Checking…</small></div>
+          <div class="ctl" id="ph-secure-ctl"></div></div>
+        <div class="set-row" id="ph-steps-row" hidden style="display:block"><ol class="ph-steps" id="ph-steps"></ol></div>
+        <div class="set-row"><div class="lbl">Home Screen app<small id="ph-home">${ui.standalone
+          ? 'You’re using Attic from the Home Screen.'
+          : ui.isIOS ? 'In Safari, tap Share, then Add to Home Screen. Attic then opens full screen, like an app. Do it from the secure address: the Home Screen app keeps the address it was added from.'
+          : 'In your browser’s menu, choose Add to Home Screen (or Install app).'}</small></div></div>
+        <div class="set-row"><div class="lbl">On a phone<small>Attic works the same here, except: files sent to this phone wait until you open Attic; there are no notifications while it’s closed; and the phone doesn’t report its own stats.</small></div></div>
+      </section>` : ''}
+
       ${master ? `
       <section class="card" aria-labelledby="h-sh">
         <div class="card-head" style="margin-bottom:4px"><h2 id="h-sh">Shares <span class="scope">Master</span></h2><span class="grow"></span><button class="btn btn-secondary btn-sm" id="add-share">${U.icon('plus')}Add share</button></div>
@@ -101,7 +114,7 @@
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="import">${U.icon('upload')}Import JSON</button><input type="file" id="import-file" accept="application/json,.json" hidden></div></div>
         <div class="set-row"><div class="lbl">Simulate failures<small>Makes 10% of Devices and Transfers requests fail, to test error states. Those two views stay on sample data until Phase 2.</small></div>
           <div class="ctl"><label class="check"><input type="checkbox" id="fail" ${s.dev.failRate ? 'checked' : ''}> On</label></div></div>
-        <div class="set-row"><div class="lbl">Publish an update<small>Send a new Attic Hub installer (Attic-Hub-Setup-&lt;version&gt;.exe, from <span class="mono">npm run dist</span>) to the HP. Every device then downloads it from the HP and offers to restart into it, with no internet needed.</small></div>
+        <div class="set-row desktop-only"><div class="lbl">Publish an update<small>Send a new Attic Hub installer (Attic-Hub-Setup-&lt;version&gt;.exe, from <span class="mono">npm run dist</span>) to the HP. Every device then downloads it from the HP and offers to restart into it, with no internet needed.</small></div>
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="upd-publish">${U.icon('upload')}Choose installer</button><input type="file" id="upd-file" accept=".exe" hidden></div></div>
         <div class="set-row" id="upd-kept-row" hidden><div class="lbl">On the HP<small>The newest three are kept.</small></div>
           <div class="ctl"><ul class="inbox-recent" id="upd-kept"></ul></div></div>
@@ -115,7 +128,7 @@
         ${root.atticDesktop && root.atticDesktop.updates ? `<div class="set-row" id="upd-row"><div class="lbl" id="h-updates">Updates<small>Attic Hub updates itself from the HP, with no internet needed. A newer version downloads by itself (not while a game runs); you choose when to restart into it. <span id="upd-status" role="status"></span></small></div>
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="upd-check">${U.icon('refresh')}Check now</button><button class="btn btn-primary btn-sm" id="upd-install" hidden>Restart to update</button></div></div>` : ''}
         <div class="set-row"><div class="lbl">Running in</div><div class="ctl">${root.atticDesktop ? `Attic Hub desktop tool${root.atticDesktop.version ? ` <span class="mono">${U.esc(root.atticDesktop.version)}</span>` : ''}` : 'A web browser'}</div></div>
-        <div class="set-row" style="display:block"><div class="banner banner-info" style="margin:0">${U.icon('info')}<span>Files, shares, accounts, devices and transfers are real and live on the HP. The connection isn’t encrypted yet, so use Attic on your home Wi-Fi only. <span id="ix"></span></span></div></div>
+        <div class="set-row" style="display:block"><div class="banner banner-info" style="margin:0">${U.icon('info')}<span>Files, shares, accounts, devices and transfers are real and live on the HP. <span id="ix-lead">This connection isn’t encrypted, so use Attic on your home Wi-Fi only.</span> <span id="ix"></span></span></div></div>
         <div class="set-row"><div class="lbl">Requirements</div><div class="ctl" style="flex-direction:column;align-items:flex-end;gap:4px">
           <a href="${HUB_REQUIREMENTS_URL}" target="_blank" rel="noopener">Attic Hub requirements ${U.icon('chevronRight').replace('class="ic"', 'class="ic" style="width:14px;height:14px;vertical-align:-2px"')}</a>
           <a href="${REQUIREMENTS_URL}" target="_blank" rel="noopener">Phase 1A requirements ${U.icon('chevronRight').replace('class="ic"', 'class="ic" style="width:14px;height:14px;vertical-align:-2px"')}</a></div></div>
@@ -385,6 +398,25 @@
         await api.clearAllData();
         ctx.reset();
       };
+    }
+    // Phase 4, 4-1: this phone's connection. Over http, the one-time steps to trust the HP's own
+    // certificate, then the secure address.
+    const secure = location.protocol === 'https:';
+    const ixLead = main.querySelector('#ix-lead');
+    if (ixLead) ixLead.textContent = secure ? 'The connection is encrypted with the HP’s own certificate.' : 'This connection isn’t encrypted, so use Attic on your home Wi-Fi only.';
+    if (main.querySelector('#h-phone')) {
+      const out = main.querySelector('#ph-secure'), ctl = main.querySelector('#ph-secure-ctl');
+      api.getTls().then(tls => {
+        if (!out.isConnected) return;
+        const fp = tls && tls.caFingerprint ? `<span class="mono fp">${U.esc(tls.caFingerprint)}</span>` : '';
+        if (secure) { out.innerHTML = `On. Attic is encrypted with the HP’s own certificate${fp ? `, from the certificate authority with fingerprint ${fp}` : ''}.`; return; }
+        if (!tls || !tls.httpsPort) { out.textContent = 'The HP doesn’t offer a secure address yet, so use Attic on your home Wi-Fi only.'; return; }
+        const url = api.secureUrl(tls);
+        out.innerHTML = 'Off: this address isn’t encrypted. The HP has a secure one; trust the HP once, then use it.';
+        ctl.innerHTML = `<a class="btn btn-primary btn-sm" id="ph-go" href="${U.esc(url)}">Open the secure address</a>`;
+        main.querySelector('#ph-steps-row').hidden = false;
+        main.querySelector('#ph-steps').innerHTML = ui.secureSteps(tls);
+      });
     }
     api.indexInfo().then(i => { const el = main.querySelector('#ix'); if (el) el.textContent = `${U.formatCount(i.entries)} files you can see, drives last read ${U.absDate(i.generatedAt, true)}.`; }).catch(() => {});
 

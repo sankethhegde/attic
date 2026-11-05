@@ -66,7 +66,7 @@
         <div id="sd-what"></div>
         ${!pickable ? '' : `<div class="send-pick">
           <button type="button" class="btn btn-secondary btn-sm" id="sd-files">${U.icon('file')}Choose files</button>
-          <button type="button" class="btn btn-secondary btn-sm" id="sd-folder">${U.icon('folder')}Choose a folder</button>
+          <button type="button" class="btn btn-secondary btn-sm desktop-only" id="sd-folder">${U.icon('folder')}Choose a folder</button>
           <input type="file" id="sd-in-files" multiple hidden>
           <input type="file" id="sd-in-folder" webkitdirectory hidden>
         </div>`}

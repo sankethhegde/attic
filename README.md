@@ -52,6 +52,7 @@ Electron's binary download is an install script, which npm may hold for approval
 | `node scripts/shortcuts-test.mjs [exe]` | The 3-3 flow: choosing the Hub Inbox folder, "Send to Attic Hub" launches (a file and a folder) making one Send dialog and sending by path, Retry by path, dropping a file on the window, the Dashboard's Upload keeping its drops. With an exe, also adds and removes the real right-click entry |
 | `node scripts/low-resource-test.mjs [exe]` | The 3-4 flow: low-resource mode on Automatic, turned on by a Steam game (a test registry key, never Steam's) and by a real full-screen window, with reports slowing at the HP and the interface holding still; Always on, Off, the tray's choice, and the game watcher ending with the tool |
 | `node scripts/update-test.mjs [exe]` | The 3-5 flow: publishing an installer from Settings as the master, the HP announcing it, the download checked against its SHA-512, a release held back during a game, the notification and tray item, and Restart to update running the installer silently (a stand-in installer that only records how it was started) |
+| `node scripts/phone-test.mjs` | The 4-1 flow: a browser emulating an iPhone (Safari's user agent, touch, no desktop tool) pairs over http, follows the steps to the HP's HTTPS address, and checks every view and the main dialogs at 390 and 320 px (nothing scrolling sideways, 40 px tap targets, 16 px inputs), the Home Screen manifest and icons, and the desktop-only actions being gone. `SHOTS=<folder>` saves screenshots; `AUDIT=1` prints every measurement |
 | `node scripts/serve-ui.js` | Serves `ui/` on localhost, to check it in a normal browser |
 
 ## First run
@@ -95,6 +96,19 @@ The installed tool carries the whole server (`resources\server`) and runs it wit
 - **Then it offers it:** a notification, "Restart to update to …" in the tray, and Settings → About → Updates (with Check now). Restarting runs the installer silently and opens Attic Hub again.
 - **On the HP itself**, Server mode's screen offers it. Installing stops the service for a moment and starts it again afterwards.
 - **The installers aren't code-signed yet**, so Windows may warn the first time one is run by hand.
+
+## The iPhone (Phase 4)
+
+The iPhone uses the same interface in Safari, served by the HP (4-1):
+- **Secure address.** The HP serves HTTPS on port 8443 with its own certificate (see [server/README.md](server/README.md#https-for-the-iphone-phase-4-milestone-4-1)). Opened at the plain address (`http://<HP>:8080`), the pairing screen and Settings → This iPhone show the one-time steps: download the HP's profile, install it, turn on full trust, then open the secure address. The phone stays paired and signed in when it moves.
+- **Home Screen app.** From the secure address, Share → Add to Home Screen. It opens full screen with the Attic icon. The files are `ui/manifest.webmanifest` and `ui/assets/app-icons/`, from `ui/assets/logo/attic-app-icon.svg` (`npm run icons -- --web` in `desktop/`).
+- **Phone layout.**
+  - Seven tabs at the bottom, with Dashboard shown as "Home" on narrow phones.
+  - Controls at least 40–44 px, and text fields at 16 px, so Safari doesn't zoom in.
+  - Content kept clear of the notch and the home indicator.
+  - Toasts sit above the tab bar.
+  - Checked at 390 and 320 px.
+- **Not on a phone:** Choose a folder, Drag files here, and Publish an update are hidden (`ui.handheld`, class `desktop-only`). Settings → This iPhone says what else differs: files wait until Attic is opened, there are no notifications while it's closed, and the phone doesn't report its own stats.
 
 On a fresh server the interface shows setup for the master account, with a password you choose. The master then adds an account for each device from the Dashboard.
 

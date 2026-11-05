@@ -326,6 +326,34 @@ For the final pass on the real machines:
 - install 0.10.0 on the Acer, publish a newer build from its Settings, and restart into it;
 - do the same on the HP with the service running, and check it's running again afterwards.
 
+## Phase 4, milestone 4-1: phone layout and Home Screen app, the Acer's half (5 Nov 2026)
+
+The HP's half (HTTPS the iPhone trusts) was done in pull request #23. Checked with a browser emulating an iPhone: Safari's user agent, touch, 390 px and 320 px wide, and no desktop tool. It reached a throwaway copy of the real server at this PC's network address, over http and then over HTTPS. Only certificates from the HP's own CA were accepted.
+
+| Check | Result | How it was verified |
+| --- | --- | --- |
+| Moving to the secure address | ✅ | Over http, the pairing screen and Settings → This iPhone show the four steps (with the CA's fingerprint) and Open the secure address. The profile they link to downloads from the HP. The phone stayed paired and signed in over HTTPS, and Settings then says it's encrypted |
+| Layout at phone width | ✅ | Every view (Dashboard, Files, a photo folder, Documents, Photos, Videos, Other, Devices, Transfers, Settings) and the Send, Pair a device and file details sheets, at 390 px and 320 px: nothing wider than the screen, and nothing scrolling sideways |
+| Touch | ✅ | Every tap target at least 40 px (buttons 44 px), and every text field 16 px, so Safari doesn't zoom in when one is tapped |
+| Tab bar | ✅ | All seven labels whole at 390 px and 320 px ("Home" for Dashboard on narrow phones). Toasts sit above it |
+| Home Screen app | ✅ | `manifest.webmanifest` (standalone, served as `application/manifest+json`), icons that load at their stated sizes (192, 512, 512 maskable, and a 180 px Apple touch icon), and Safari's full-screen tags. Content stays clear of the notch and home indicator |
+| Desktop-only actions hidden | ✅ | No Choose a folder, no Drag files here (the button says Choose photos or files), no Publish an update |
+
+Tests: `phone-test.mjs` 14/14. Also `node --test "agent/*.test.js"` 52/52, `node --test "server/*.test.js"` 157/157, and every desktop suite: `smoke-test.mjs` (0 console errors), `tray-test.mjs` 19/19, `mode-test.mjs` 14/14, `discovery-test.mjs` 13/13, `pairing-test.mjs` 19/19, `live-stats-test.mjs` 17/17, `send-test.mjs` 19/19, `transfers-test.mjs` 17/17, `shortcuts-test.mjs` 12/12, `low-resource-test.mjs` 16/16, `update-test.mjs` 12/12.
+
+Found and fixed:
+- **Safari would zoom into every text field:** they were 15 px.
+- **Buttons were 30–32 px tall** on a phone. On touch screens they're now 40–44 px. That includes the desktop tool on the ROG Ally's touch screen.
+- **The tab bar squeezed its labels.** "Transfers" was cut off at 320 px.
+- **Toasts covered the tab bar.**
+- **The pairing card scrolled sideways** at 390 px (it kept its 420 px width).
+- **A share's long folder path** made Files scroll sideways.
+
+For the final pass on the real iPhone:
+- install the HP's profile and trust it;
+- open the secure address, and add Attic to the Home Screen;
+- check the notch and home indicator in portrait and landscape, and the light and dark themes.
+
 ## Problems found and fixed during the run
 
 1. **Focus after navigation:** after opening a folder or tab, keyboard focus fell back to the top of the page, so you had to Tab through the header again. It now moves into the new content.

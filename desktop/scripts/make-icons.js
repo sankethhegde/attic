@@ -1,5 +1,8 @@
 // Renders the Attic mark (ui/assets/logo/attic-mark.svg) to PNG at each Windows icon size and packs
 // them into build/icon.ico (PNG-compressed entries, valid since Windows Vista). Run: npm run icons
+// Phase 4, 4-1: also the iPhone's Home Screen icons, from the full-bleed ui/assets/logo/attic-app-icon.svg
+// (iOS rounds the corners itself; the mark sits inside the "maskable" safe zone for Android), into
+// ui/assets/app-icons/. `npm run icons -- --web` makes only those.
 const { app, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
@@ -7,15 +10,18 @@ const path = require('path');
 const SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256];
 const SVG = path.join(__dirname, '..', '..', 'ui', 'assets', 'logo', 'attic-mark.svg');
 const OUT = path.join(__dirname, '..', 'build');
+const APP_SVG = path.join(__dirname, '..', '..', 'ui', 'assets', 'logo', 'attic-app-icon.svg');
+const WEB_OUT = path.join(__dirname, '..', '..', 'ui', 'assets', 'app-icons');
+const WEB = [['apple-touch-icon.png', 180], ['icon-192.png', 192], ['icon-512.png', 512]];
 
 // Electron's network service can restart while the first page loads; one retry covers it.
-async function render(win, size) {
-  try { return await renderOnce(win, size); }
-  catch (e) { return renderOnce(win, size); }
+async function render(win, size, file = SVG) {
+  try { return await renderOnce(win, size, file); }
+  catch (e) { return renderOnce(win, size, file); }
 }
 
-async function renderOnce(win, size) {
-  const svg = fs.readFileSync(SVG, 'utf8').replace(/width="24" height="24"/, `width="${size}" height="${size}"`);
+async function renderOnce(win, size, file) {
+  const svg = fs.readFileSync(file, 'utf8').replace(/width="24" height="24"/, `width="${size}" height="${size}"`);
   const html = `<html><body style="margin:0;background:transparent">${svg}</body></html>`;
   await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
   await new Promise(r => setTimeout(r, 120));
@@ -45,6 +51,10 @@ app.whenReady().then(async () => {
   fs.mkdirSync(OUT, { recursive: true });
   const win = new BrowserWindow({ width: 512, height: 512, show: false, frame: false, transparent: true,
     webPreferences: { offscreen: true, zoomFactor: 1 } });
+  fs.mkdirSync(WEB_OUT, { recursive: true });
+  for (const [name, size] of WEB) fs.writeFileSync(path.join(WEB_OUT, name), await render(win, size, APP_SVG));
+  console.log('Wrote ui/assets/app-icons/ (' + WEB.map(w => w[0]).join(', ') + ')');
+  if (process.argv.includes('--web')) return app.quit();
   const pngs = [];
   for (const size of SIZES) pngs.push({ size, data: await render(win, size) });
   fs.writeFileSync(path.join(OUT, 'icon.ico'), ico(pngs));

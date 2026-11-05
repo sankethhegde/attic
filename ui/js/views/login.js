@@ -4,7 +4,23 @@
   const { util: U, api, ui, background } = root.Attic;
 
   // Passwords are hashed on the server, but until HTTPS arrives they cross the home network unencrypted.
-  const HTTP_NOTE = `<p class="mock-note">${U.icon('info')}<span>This connection isn’t encrypted yet. Sign in only on your home Wi-Fi.</span></p>`;
+  // Under the form: whether the connection is encrypted (Phase 4, 4-1: the HP's HTTPS). On a phone over
+  // http, the steps to trust the HP once and move to its secure address (filled in by secureHint()).
+  const HTTP_NOTE = () => location.protocol === 'https:'
+    ? `<p class="mock-note">${U.icon('lock')}<span>Encrypted with the HP’s own certificate.</span></p>`
+    : `<p class="mock-note">${U.icon('info')}<span>This connection isn’t encrypted. Sign in only on your home Wi-Fi.</span></p>`
+      + (ui.handheld ? '<details class="secure-hint" hidden><summary>Use the secure address</summary><ol class="ph-steps"></ol><a class="btn btn-secondary btn-block" id="go-secure">Open the secure address</a></details>' : '');
+  function secureHint(stage) {
+    const d = stage.querySelector('.secure-hint');
+    if (!d) return;
+    api.getTls().then(tls => {
+      const url = api.secureUrl(tls);
+      if (!url || !d.isConnected) return;
+      d.querySelector('.ph-steps').innerHTML = ui.secureSteps(tls);
+      d.querySelector('#go-secure').href = url;
+      d.hidden = false;
+    });
+  }
 
   function field({ id, label, type, icon, autocomplete, eye, value }) {
     return `<div class="field${eye ? ' has-eye' : ''}${icon ? '' : ' no-icon'}" data-field="${id}">
@@ -58,9 +74,10 @@
         ${field({ id: 'su-pass2', label: 'Confirm password', type: 'password', icon: 'lock', eye: true, autocomplete: 'new-password' })}
         <button class="btn btn-primary btn-block" type="submit" style="height:48px;margin-top:6px">Create master account</button>
         <div class="form-error" role="alert"></div>
-        ${HTTP_NOTE}
+        ${HTTP_NOTE()}
       </form></div>`;
     const stage = app.querySelector('#stage');
+    secureHint(stage);
     background.engine.mount(stage);
     const form = stage.querySelector('form');
     const card = form;
@@ -111,11 +128,12 @@
         <button class="btn btn-primary btn-block" type="submit" style="height:48px">Sign in</button>
         <div class="form-error" id="lg-error" role="alert"></div>
         <div id="lg-switch"></div>
-        ${HTTP_NOTE}
+        ${HTTP_NOTE()}
       </form>
       <button class="corner-btn" id="bg-btn" type="button" aria-label="Change login background" title="Change background">${U.icon('image')}</button>
     </div>`;
     const stage = app.querySelector('#stage');
+    secureHint(stage);
     background.engine.mount(stage);
     const form = stage.querySelector('form');
     const card = form;
@@ -220,10 +238,11 @@
         <div id="pr-device" class="lg-device"></div>
         <button class="btn btn-primary btn-block" type="submit" style="height:48px">Pair</button>
         <div class="form-error" id="pr-error" role="alert"></div>
-        ${HTTP_NOTE}
+        ${HTTP_NOTE()}
       </form>
     </div>`;
     const stage = app.querySelector('#stage');
+    secureHint(stage);
     background.engine.mount(stage);
     const form = stage.querySelector('form');
     const code = form.querySelector('#pr-code'), name = form.querySelector('#pr-name');
