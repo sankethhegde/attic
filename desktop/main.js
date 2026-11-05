@@ -166,7 +166,7 @@ if (SUPERVISOR_ARG) {
     tray = require('./tray.js').createTray({
       iconPath: ICON,
       getState: () => ({ status: trayStatus(), mode: mode && mode.mode, startWithWindows: prefs.startWithWindows,
-        canStartWithWindows: app.isPackaged, notify: prefs.notify, low: lowOut() }),
+        canStartWithWindows: app.isPackaged, notify: prefs.notify, low: lowOut(), update: updateOut() }),
       actions: {
         open: showWindow,
         openInbox,
@@ -174,6 +174,7 @@ if (SUPERVISOR_ARG) {
         toggleStart: () => setPrefs({ startWithWindows: !prefs.startWithWindows }),
         toggleNotify: group => setPrefs({ notify: { [group]: !prefs.notify[group] } }),
         setLowResource: m => setPrefs({ lowResource: m }),
+        installUpdate: () => installUpdate(),
         quit: quitApp
       }
     });
@@ -184,6 +185,7 @@ if (SUPERVISOR_ARG) {
       updateTray();
     }, 5000).unref();
     start();
+    resumeAfterUpdate();
   });
   // "Start now" runs the server as a child of the tool; it stops with the tool.
   app.on('before-quit', () => { quitting = true; if (control) control.stopChild(); });
@@ -193,6 +195,7 @@ if (SUPERVISOR_ARG) {
 function start() {
   if (!mode) return showChooser();
   startGameWatch(); // only a client watches for games; the role may just have changed
+  scheduleUpdateChecks();
   if (mode.mode === 'server') return showServerPage();
   startSearch();
 }
@@ -335,6 +338,7 @@ async function startAgent() {
     else if (msg.type === 'inbox') receiver.add(msg.transfers);
     else if (msg.type === 'transfer' && msg.transfer) receiver.add([msg.transfer]);
     else if (msg.type === 'transfer-cancelled') receiver.cancel(msg.id);
+    else if (msg.type === 'update') getUpdater().offer(msg.latest); // 3-5: on connect, and when one is published
   } });
 }
 function stopAgent() {
@@ -574,6 +578,7 @@ function applyLow() {
   const flipped = next.active !== low.active;
   low = next;
   if (flipped && agent) agent.nudge(); // the new pace starts now, not after the old wait
+  if (flipped && !low.active && updater) updater.retry(); // an update held back during the game (3-5)
   if (win && !win.isDestroyed()) win.webContents.send('low:state', lowOut());
   updateTray();
 }
@@ -608,6 +613,97 @@ function stopGameWatch() {
 }
 app.on('will-quit', stopGameWatch);
 ipcMain.handle('low:get', e => trusted(e) ? lowOut() : null);
+
+// ---------- updates from the HP (3-5, T-10) ----------
+// The HP announces its newest installer to the agent (on connect, and when one is published); the tool
+// also asks now and then, and when Settings says Check now. A newer one downloads in the background
+// (not during a game: low-resource mode holds it), is checked against the HP's SHA-512, and then the
+// tool offers "Restart to update": the installer runs silently and starts Attic Hub again.
+// On the HP itself (Server mode) it asks its own server, and installing stops the service first and
+// starts it again after the update.
+const { createUpdater } = require(path.join(ROOT, 'agent', 'updater.js'));
+const UPDATE_DIR = path.join(app.getPath('userData'), 'updates');
+const RESUME_FILE = path.join(app.getPath('userData'), 'update-resume.json');
+const CHECK_CLIENT_MS = 6 * 3600e3;  // a client also hears about new releases over the hub at once
+const CHECK_SERVER_MS = 10 * 60e3;   // the HP asks itself, which is cheap
+const canInstall = () => app.isPackaged || (TEST_HOOKS && process.env.ATTIC_DEV_INSTALL === '1');
+let updater = null, checkTimer = 0;
+function updateServer() {
+  if (mode && mode.mode === 'server') {
+    const c = getControl();
+    if (!c) return null;
+    const u = new URL(c.url());
+    u.hostname = '127.0.0.1'; // the HP trusts its own address, so it needs no pairing to ask itself
+    return { base: u.href, headers: {} };
+  }
+  if (!server || !agentToken) return null; // a client asks as its paired device
+  return { base: connect.urlFor(server), headers: { 'X-Attic-Device': agentToken } };
+}
+function getUpdater() {
+  if (updater) return updater;
+  updater = createUpdater({ current: app.getVersion(), dir: UPDATE_DIR, server: updateServer, canDownload: () => !low.active, onState: s => {
+    if (win && !win.isDestroyed()) win.webContents.send('update:state', updateOut());
+    updateTray();
+    // Once per version: a notification that it's ready. Clicking it shows where to install it.
+    if (s.status === 'ready' && s.latest && prefs.updateShown !== s.latest.version) {
+      setPrefs({ updateShown: s.latest.version });
+      notify(`Attic Hub ${s.latest.version} is ready to install`, 'Restart Attic Hub to update. It takes a moment, and everything carries on afterwards.', showUpdates);
+    }
+  } });
+  return updater;
+}
+function updateOut() {
+  const s = updater ? updater.state : { status: 'idle', current: app.getVersion(), latest: null, done: 0, error: null };
+  return Object.assign({}, s, { canInstall: canInstall(), mode: mode && mode.mode, low: low.active });
+}
+function scheduleUpdateChecks() {
+  clearInterval(checkTimer);
+  if (!mode) return;
+  const server_ = mode.mode === 'server';
+  checkTimer = setInterval(() => { if (updateServer()) getUpdater().check(); }, server_ ? CHECK_SERVER_MS : CHECK_CLIENT_MS);
+  checkTimer.unref();
+  // The HP: ask once its server answers. A client hears from the hub as soon as its agent connects.
+  if (server_) setTimeout(() => { if (updateServer()) getUpdater().check(); }, 5000).unref();
+}
+function showUpdates() {
+  showWindow();
+  if (!win) return;
+  if (mode && mode.mode === 'server') return; // Server mode's screen shows it at the top
+  win.webContents.send('update:open');
+}
+async function installUpdate() {
+  if (!canInstall()) return { error: 'Only the installed Attic Hub can update itself: this is a development copy.' };
+  const r = await getUpdater().installer();
+  if (r.error) return r;
+  // The HP: the service runs this same program, so it stops for the update and starts again afterwards.
+  if (mode && mode.mode === 'server' && getControl()) {
+    try {
+      const st = await control.status();
+      if (st.task && st.task.ours && st.server) {
+        await control.stop();
+        fs.writeFileSync(RESUME_FILE, JSON.stringify({ startService: true, from: app.getVersion(), to: r.version }));
+      }
+    } catch (e) { return { error: 'Couldn’t stop the server for the update: ' + e.message }; }
+  }
+  require('child_process').spawn(r.file, r.args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+  setTimeout(quitApp, 300);
+  return { ok: true, version: r.version };
+}
+// After an update on the HP: start the service again.
+async function resumeAfterUpdate() {
+  let flag;
+  try { flag = JSON.parse(fs.readFileSync(RESUME_FILE, 'utf8')); } catch (e) { return; }
+  fs.rmSync(RESUME_FILE, { force: true });
+  if (flag.startService && getControl()) { try { await control.start(); } catch (e) { /* Server mode's screen shows it stopped */ } }
+}
+ipcMain.handle('update:get', e => trusted(e) ? updateOut() : null);
+ipcMain.handle('update:check', async e => {
+  if (!trusted(e)) return null;
+  if (!updateServer()) return Object.assign(updateOut(), { status: 'error', error: 'Attic Hub isn’t connected to the HP (or this PC isn’t paired yet).' });
+  await getUpdater().check();
+  return updateOut();
+});
+ipcMain.handle('update:install', e => trusted(e) ? installUpdate() : null);
 
 // The right-click entry follows its preference, in the installed app only (a development copy would
 // point Explorer at electron.exe).

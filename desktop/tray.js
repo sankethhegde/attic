@@ -11,7 +11,8 @@ const { Tray, Menu, nativeImage } = require('electron');
 
 // getState() → { status, mode, startWithWindows, canStartWithWindows, notify: { received, transfers, devices },
 //   low: { pref, active, reason, app } }
-// actions: { open, openInbox, serverControls, toggleStart, toggleNotify(group), setLowResource(pref), quit }
+//   update: the updater's state (3-5), for "Restart to update to …" once one is downloaded
+// actions: { open, openInbox, serverControls, toggleStart, toggleNotify(group), setLowResource(pref), installUpdate, quit }
 const LOW_WHY = { steam: 'a Steam game is running', fullscreen: 'a full-screen app is in front', on: 'set to Always on' };
 function lowLine(low) {
   return low && low.active ? `Low-resource mode on: ${LOW_WHY[low.reason] || 'a game is running'}` : null;
@@ -30,6 +31,9 @@ function createTray({ iconPath, getState, actions }) {
     return [
       { label: s.status, enabled: false },
       ...(lowNow ? [{ label: lowNow, enabled: false }] : []),
+      // 3-5: a downloaded update, ready to install.
+      ...(s.update && s.update.status === 'ready' && s.update.latest && s.update.canInstall
+        ? [{ type: 'separator' }, { label: `Restart to update to ${s.update.latest.version}`, click: () => actions.installUpdate() }] : []),
       { type: 'separator' },
       { label: 'Open Attic Hub', click: () => actions.open() },
       client ? { label: 'Open Hub Inbox', click: () => actions.openInbox() } : { label: 'Server controls', click: () => actions.serverControls() },

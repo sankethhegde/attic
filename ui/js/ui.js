@@ -39,6 +39,14 @@
     root.atticDesktop.lowResource.onChange(applyLow);
     root.atticDesktop.lowResource.get().then(applyLow).catch(() => {});
   }
+  // Updates (3-5): the "ready to install" notification was clicked: show Settings, at Updates.
+  if (root.atticDesktop && root.atticDesktop.updates && root.atticDesktop.updates.onOpen) {
+    root.atticDesktop.updates.onOpen(() => {
+      ui.wantUpdates = true;
+      if (location.hash === '#/settings') root.dispatchEvent(new HashChangeEvent('hashchange'));
+      else location.hash = '#/settings';
+    });
+  }
 
   // ---------- toasts ----------
   ui.toast = (msg, kind) => {
