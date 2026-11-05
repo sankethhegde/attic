@@ -11,7 +11,9 @@ The server that runs on the HP laptop. Built one milestone at a time from `docs/
 - **3-2:** it sends each client the events it should turn into Windows notifications. See [Notification events](#notification-events-phase-3-milestone-3-2-t-05).
 - **3-5:** it serves the newest desktop-tool installer and its version, so every client can update itself. See [Updates](#updates-phase-3-milestone-3-5-t-10). 3-3 and 3-4 have no server side.
 
-**Phase 4 on the server:** it serves the interface to Safari over HTTPS, with a certificate the iPhone trusts (4-1). See [HTTPS for the iPhone](#https-for-the-iphone-phase-4-milestone-4-1).
+**Phase 4 on the server:**
+- **4-1:** it serves the interface to Safari over HTTPS, with a certificate the iPhone trusts. See [HTTPS for the iPhone](#https-for-the-iphone-phase-4-milestone-4-1).
+- **4-2:** a phone's large videos get through: there's no five-minute cut-off, and uploads resume after a drop. See [Large uploads from the phone](#large-uploads-from-the-phone-phase-4-milestone-4-2).
 
 ## Run it
 
@@ -478,6 +480,45 @@ These are public because a phone needs them before it trusts the HTTPS address, 
 - the fingerprint at pairing;
 - the manifest type, and starting with the port taken;
 - re-issuing on an address change and near the end, with the CA unchanged.
+
+## Large uploads from the phone (Phase 4, milestone 4-2)
+
+The requirements gave 4-2 no server work "unless large-video uploads need tuning". They did, in two ways. This is the HP's half; the camera-roll picker and sending from the phone are the Acer's half.
+
+**1. No five-minute cut-off.** Node ends any request still running after 5 minutes (`requestTimeout`), and Attic had kept that default. Over Wi-Fi, a 3 GB video upload or send takes about that long, so it failed near the end. Loopback tests are too fast to show it. Now a request may take as long as it needs, and only a connection that's gone *silent* for 5 minutes (nothing sent or received) is closed. This applies to both http and HTTPS, so the one-request uploads from 1C-5 and 2-4 benefit too.
+
+**2. Resumable uploads** (`uploads.js`). On a phone, one long request rarely survives: the screen locks, Safari goes to the background, or the Wi-Fi drops. A resumable upload sends the file in pieces and carries on after a break:
+
+1. `POST /api/uploads`, with `{ shareId, folder, name, size }` for Files, or `{ transferId }` for a send (after `POST /api/transfers`). It answers with `{ id, offset: 0, size, chunkSize: 8388608, maxChunk }`.
+2. `PUT /api/uploads/<id>?offset=<n>` with each piece as the body (`X-Attic-Upload: 1`), up to 64 MB; 8 MB is a good size. Each answer gives the new `offset`. The last one has `done: true` and `result`: the file's entry, as a Files upload returns it, or the transfer, now `queued`.
+3. After a drop, `GET /api/uploads/<id>` gives the `offset` the HP has. A piece sent at the wrong offset gets `409 OFFSET` with the right one.
+4. `DELETE /api/uploads/<id>` gives up, deleting what arrived.
+
+How it behaves:
+- **Bytes go straight to their destination:** a hidden `~attic-….part` file in the destination folder, or `<id>.chunked` in the transfer spool. Finishing a 10 GB video is therefore a link or a rename, not a copy.
+- **Nothing is overwritten:** the file lands under a name nobody has taken (`IMG_0420 (1).MOV`). It's owned by the uploader, exactly as with the one-request upload.
+- **Nothing is wasted:** the bytes of a piece cut off part-way are kept.
+- **Sessions survive restarts:** they're kept in `server/data/uploads.json`. A send's transfer stays `active` / `upload` while its resumable upload is unfinished, instead of failing, and shows live progress.
+- **Only the starter can continue:** the same account on the same device. Anyone else gets "not found".
+- **Room is checked up front:** the share's drive must have room for the file before the upload starts.
+- **Abandoned uploads are cleaned up:** a session untouched for a day is dropped. For a send, the transfer fails, ready for Retry.
+
+| Route | Who | Does |
+| --- | --- | --- |
+| `POST /api/uploads` | signed in | Start, to a share's folder or a transfer you created |
+| `GET /api/uploads/<id>` | the starter | `{ offset, size, … }`: where it got to |
+| `PUT /api/uploads/<id>?offset=<n>` | the starter | The next piece |
+| `DELETE /api/uploads/<id>` | the starter | Give up |
+
+`uploads.test.js` covers:
+- a video in pieces, with a drop mid-piece, carried on and landing whole, as the phone's own file and never overwriting;
+- the wrong offset, past the end, another account or device, and bad starts;
+- an HP restart mid-upload;
+- an empty file;
+- a send in pieces through a drop and a restart, arriving whole;
+- cancelling the transfer;
+- a slow upload outlasting the idle limit while a silent one is closed;
+- the one-day clean-up.
 
 ## Rules that carry over
 

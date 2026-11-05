@@ -133,14 +133,33 @@ function createFiles(shares, safePath) {
 
     // An upload, streamed to a temporary file in the destination folder and linked into place under a
     // name nobody has taken: an existing file is never overwritten, and a half-sent file never shows.
-    async saveUpload(shareId, folderRel, name, stream, view, limit) {
+    // An upload's destination, checked: the folder as the disk spells it, and a temporary file in it for
+    // the bytes (hidden from listings). Shared by the one-request upload below and the resumable one (4-2).
+    async prepareUpload(shareId, folderRel, name, view) {
       const share = shareOrThrow(shareId);
       if (typeof name !== 'string' || !name || name.includes('/') || name.includes('\\')) throw new FileError(400, 'INVALID', 'Give the file a name.');
       if (/\.(lnk|tmp|crdownload|part)$/i.test(name) || isTemp(name)) throw new FileError(400, 'INVALID', 'This file type can’t be uploaded.');
       if (!safePath(shareId, joinRel(folderRel, name))) throw new FileError(400, 'INVALID', 'Windows can’t store a file with that name.');
-      const { dir: folder, rel: canon } = await folderPath(share, shareId, folderRel, view);
-      folderRel = canon;
-      const temp = path.join(folder, `~attic-${crypto.randomBytes(8).toString('hex')}.part`);
+      const { dir, rel } = await folderPath(share, shareId, folderRel, view);
+      return { shareId, shareName: share.name, folderRel: rel, dir, name, temp: path.join(dir, `~attic-${crypto.randomBytes(8).toString('hex')}.part`) };
+    },
+    // Links a finished temporary file into place under a name nobody has taken ("photo (1).jpg"), so an
+    // existing file is never overwritten. The temporary file stays for the caller to delete.
+    async placeUpload(prep, temp = prep.temp) {
+      const { ext, base } = splitName(prep.name);
+      for (let n = 0; ; n++) {
+        const finalName = n ? `${base} (${n})${ext}` : prep.name;
+        const finalRel = joinRel(prep.folderRel, finalName);
+        if (!safePath(prep.shareId, finalRel)) throw new FileError(400, 'INVALID', 'Windows can’t store a file with that name.');
+        try { await fs.promises.link(temp, path.join(prep.dir, finalName)); return { rel: finalRel, name: finalName }; }
+        catch (e) { if (e.code !== 'EEXIST' || n > 999) throw e; }
+      }
+    },
+
+    async saveUpload(shareId, folderRel, name, stream, view, limit) {
+      const prep = await this.prepareUpload(shareId, folderRel, name, view);
+      const share = { name: prep.shareName };
+      const temp = prep.temp;
       let bytes = 0, out;
       try {
         // Settles only once the temp file is closed: Windows can neither link nor delete an open file.
@@ -156,15 +175,7 @@ function createFiles(shares, safePath) {
           out.on('close', () => failure ? reject(failure) : resolve());
           stream.pipe(out);
         });
-        const { ext, base } = splitName(name);
-        for (let n = 0; ; n++) {
-          const finalName = n ? `${base} (${n})${ext}` : name;
-          const finalRel = joinRel(folderRel, finalName);
-          if (!safePath(shareId, finalRel)) throw new FileError(400, 'INVALID', 'Windows can’t store a file with that name.');
-          const finalPath = path.join(folder, finalName);
-          try { await fs.promises.link(temp, finalPath); return { rel: finalRel, name: finalName, size: bytes }; }
-          catch (e) { if (e.code !== 'EEXIST' || n > 999) throw e; }
-        }
+        return Object.assign(await this.placeUpload(prep), { size: bytes });
       } catch (e) {
         if (e instanceof FileError) throw e;
         if (e.code === 'ENOSPC') throw new FileError(507, 'DISK_FULL', `${share.name} is full.`);
