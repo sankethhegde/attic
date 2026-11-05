@@ -51,6 +51,7 @@ Electron's binary download is an install script, which npm may hold for approval
 | `node scripts/tray-test.mjs [exe]` | The 3-2 flow: the tray and its menu, closing to the tray, a received file's notification (one for several), the HP's events (delivered, failed, offline, online), switching them off, catching up after a restart, `--hidden`. With an exe, also switches the real start-with-Windows entry on and off |
 | `node scripts/shortcuts-test.mjs [exe]` | The 3-3 flow: choosing the Hub Inbox folder, "Send to Attic Hub" launches (a file and a folder) making one Send dialog and sending by path, Retry by path, dropping a file on the window, the Dashboard's Upload keeping its drops. With an exe, also adds and removes the real right-click entry |
 | `node scripts/low-resource-test.mjs [exe]` | The 3-4 flow: low-resource mode on Automatic, turned on by a Steam game (a test registry key, never Steam's) and by a real full-screen window, with reports slowing at the HP and the interface holding still; Always on, Off, the tray's choice, and the game watcher ending with the tool |
+| `node scripts/update-test.mjs [exe]` | The 3-5 flow: publishing an installer from Settings as the master, the HP announcing it, the download checked against its SHA-512, a release held back during a game, the notification and tray item, and Restart to update running the installer silently (a stand-in installer that only records how it was started) |
 | `node scripts/serve-ui.js` | Serves `ui/` on localhost, to check it in a normal browser |
 
 ## First run
@@ -87,6 +88,13 @@ The installed tool carries the whole server (`resources\server`) and runs it wit
 - **Always on** and **Off** don't watch for games at all.
 - **While it's on**, this PC reports its stats every 15 seconds instead of every 3, and reads battery and network every 2 minutes. It stays online at the HP. Attic Hub's window holds still: no animations, transitions, blur or changing login background.
 - **When the game ends**, everything is back to normal at once.
+
+**Updates from the HP** (3-5), with no internet needed:
+- **Publishing:** build the installer (`npm run dist`), then Settings → Advanced → **Publish an update** (as the master) sends `Attic-Hub-Setup-<version>.exe` to the HP, with an optional note on what's new. On the HP, `node server/publish-update.js` does the same.
+- **Every device hears about it at once**, downloads it in the background (not while a game runs on the Ally), and checks it against the HP's SHA-512.
+- **Then it offers it:** a notification, "Restart to update to …" in the tray, and Settings → About → Updates (with Check now). Restarting runs the installer silently and opens Attic Hub again.
+- **On the HP itself**, Server mode's screen offers it. Installing stops the service for a moment and starts it again afterwards.
+- **The installers aren't code-signed yet**, so Windows may warn the first time one is run by hand.
 
 On a fresh server the interface shows setup for the master account, with a password you choose. The master then adds an account for each device from the Dashboard.
 

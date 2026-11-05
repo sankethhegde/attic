@@ -303,6 +303,29 @@ Found during the run:
 
 For the final pass on the real machines: on the ROG Ally, start a Steam game and a Game Pass game (full screen), and check the tray says low-resource mode is on, and the HP's Devices view still shows the Ally online.
 
+## Phase 3, milestone 3-5: updates from the HP, the Acer's half (5 Nov 2026)
+
+The HP's half was done in pull request #18. Checked in the real tool against a throwaway copy of the real server. The "installer" was a stand-in compiled for the test: a real Windows program that only writes down how it was started, so nothing was installed on this PC.
+
+| Check | Result | How it was verified |
+| --- | --- | --- |
+| Check now, before anything is published | ✅ | Settings → About → Updates: "Up to date. The HP has no update to offer yet." |
+| Publish an update (master) | ✅ | Settings → Advanced → Publish an update, with a note: the HP keeps it, and Settings lists it |
+| The tool hears, downloads and checks it (T-10) | ✅ | The HP's announcement started the download at once. The file matched the HP's SHA-512, and Settings says "9.9.9 is ready to install. What's new: Faster sending". The unit tests also cover a cut-off download resuming, and a file that doesn't match being deleted |
+| It's offered (T-10) | ✅ | A notification, shown once per version (not again after a restart), "Restart to update to 9.9.9" in the tray, and the same button in Settings |
+| Not during a game | ✅ | A release published while low-resource mode was on waited ("It downloads once the game ends"), then downloaded when it ended, and replaced the older download |
+| Restart to update | ✅ | It ran the downloaded installer with `/S --updated --force-run` and quit. electron-builder's installer scripts were read to confirm that, for this installer, those start Attic Hub again after a silent install |
+| The HP updating itself | ✅ in part | The HP can ask its own server without pairing. Stopping the service for the update, and starting it again afterwards, needs the real HP |
+
+Tests: `update-test.mjs` 12/12 on the development build and on the packaged app. Also `node --test "agent/*.test.js"` 52/52, `node --test "server/*.test.js"` 148/148, `smoke-test.mjs` (0 console errors), `tray-test.mjs` 19/19, `mode-test.mjs` 14/14 (18/18 packaged), `discovery-test.mjs` 13/13, `pairing-test.mjs` 19/19, `live-stats-test.mjs` 17/17, `send-test.mjs` 19/19, `transfers-test.mjs` 17/17, `shortcuts-test.mjs` 12/12 and `low-resource-test.mjs` 16/16. The full installer builds: `Attic-Hub-Setup-0.10.0.exe`, 112 MB.
+
+Found during the work:
+- **An update would have removed the Explorer entry.** The new installer runs the old uninstaller, and the 3-3 uninstall step deleted "Send to Attic Hub" every time. It now keeps it during an update. The tool would have put it back on its next start anyway.
+
+For the final pass on the real machines:
+- install 0.10.0 on the Acer, publish a newer build from its Settings, and restart into it;
+- do the same on the HP with the service running, and check it's running again afterwards.
+
 ## Problems found and fixed during the run
 
 1. **Focus after navigation:** after opening a folder or tab, keyboard focus fell back to the top of the page, so you had to Tab through the header again. It now moves into the new content.

@@ -119,6 +119,21 @@ Tests: `node --test "agent/*.test.js"` (`explorer.js`, `checkFolder`, the new pr
 
 Tests: `node --test "agent/*.test.js"` (the decision, the pace, and the real helper seeing a Steam game through a test registry key). Also `desktop/scripts/low-resource-test.mjs`, the real tool with the real helper and a real full-screen window.
 
+## Updates from the HP (Phase 3, milestone 3-5, T-10)
+
+The HP's side is in [server/README.md](../server/README.md#updates-phase-3-milestone-3-5-t-10). **`updater.js`** is the tool's:
+- **It hears about a release** from the agent's hub (`{"type":"update","latest"}`, on connect and the moment one is published). It also asks `GET /api/updates/latest?current=` every 6 hours, and when Settings says Check now. On the HP (Server mode) it asks its own server at 127.0.0.1 every 10 minutes.
+- **It compares versions as numbers**, so 0.10.0 comes after 0.9.0.
+- **It downloads a newer installer** into `updates\` in the tool's user-data folder, with the device token. A cut-off download resumes with `Range` from its `.part` file. The size and SHA-512 must match what the HP announced, or the file is deleted. Older installers are removed.
+- **While low-resource mode is on** (3-4, a game running), the download waits, and starts when the game ends.
+- **Once it's ready**, `desktop/main.js` shows one notification per version (`prefs.updateShown`), "Restart to update to …" in the tray, and the same in Settings → About → Updates.
+- **Restarting** checks the file once more, then runs it with `/S --updated --force-run`, the way electron-builder's own updater does: silent, and Attic Hub starts again afterwards.
+  - On the HP, the service is stopped first. `update-resume.json` has it started again when the new version opens.
+  - A development copy doesn't install; the tests use `ATTIC_DEV_INSTALL=1`.
+- **The uninstall step** from 3-3 (`build/installer.nsh`) keeps the Explorer entry during an update, since the old uninstaller runs with `--updated`.
+
+Tests: `node --test "agent/*.test.js"` (`updater.js` against a stand-in HP: versions, resuming, a bad hash, waiting for a game). Also `desktop/scripts/update-test.mjs`, the real tool and server with a stand-in installer.
+
 ## Still to come
 
-The rest of Phase 3: updates (3-5).
+Phase 3 is built. Next is Phase 4, the iPhone.

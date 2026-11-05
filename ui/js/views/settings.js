@@ -101,6 +101,10 @@
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="import">${U.icon('upload')}Import JSON</button><input type="file" id="import-file" accept="application/json,.json" hidden></div></div>
         <div class="set-row"><div class="lbl">Simulate failures<small>Makes 10% of Devices and Transfers requests fail, to test error states. Those two views stay on sample data until Phase 2.</small></div>
           <div class="ctl"><label class="check"><input type="checkbox" id="fail" ${s.dev.failRate ? 'checked' : ''}> On</label></div></div>
+        <div class="set-row"><div class="lbl">Publish an update<small>Send a new Attic Hub installer (Attic-Hub-Setup-&lt;version&gt;.exe, from <span class="mono">npm run dist</span>) to the HP. Every device then downloads it from the HP and offers to restart into it, with no internet needed.</small></div>
+          <div class="ctl"><button class="btn btn-secondary btn-sm" id="upd-publish">${U.icon('upload')}Choose installer</button><input type="file" id="upd-file" accept=".exe" hidden></div></div>
+        <div class="set-row" id="upd-kept-row" hidden><div class="lbl">On the HP<small>The newest three are kept.</small></div>
+          <div class="ctl"><ul class="inbox-recent" id="upd-kept"></ul></div></div>
         <div class="set-row"><div class="lbl" style="color:var(--danger)">Clear local data<small>Signs you out and resets this browser. Nothing on the server is touched.</small></div>
           <div class="ctl"><button class="btn btn-danger btn-sm" id="clear">${U.icon('trash')}Clear local data</button></div></div>
       </section>` : ''}
@@ -108,8 +112,10 @@
       <section class="card" aria-labelledby="h-about">
         <h2 id="h-about">About</h2>
         <div class="set-row"><div class="lbl">Version</div><div class="ctl mono">${VERSION}</div></div>
+        ${root.atticDesktop && root.atticDesktop.updates ? `<div class="set-row" id="upd-row"><div class="lbl" id="h-updates">Updates<small>Attic Hub updates itself from the HP, with no internet needed. A newer version downloads by itself (not while a game runs); you choose when to restart into it. <span id="upd-status" role="status"></span></small></div>
+          <div class="ctl"><button class="btn btn-secondary btn-sm" id="upd-check">${U.icon('refresh')}Check now</button><button class="btn btn-primary btn-sm" id="upd-install" hidden>Restart to update</button></div></div>` : ''}
         <div class="set-row"><div class="lbl">Running in</div><div class="ctl">${root.atticDesktop ? `Attic Hub desktop tool${root.atticDesktop.version ? ` <span class="mono">${U.esc(root.atticDesktop.version)}</span>` : ''}` : 'A web browser'}</div></div>
-        <div class="set-row" style="display:block"><div class="banner banner-info" style="margin:0">${U.icon('info')}<span>Phase 1C. Files, shares and accounts are real and live on the HP. Devices and Transfers show sample data until Phase 2, and the connection isn’t encrypted yet, so use Attic on your home Wi-Fi only. <span id="ix"></span></span></div></div>
+        <div class="set-row" style="display:block"><div class="banner banner-info" style="margin:0">${U.icon('info')}<span>Files, shares, accounts, devices and transfers are real and live on the HP. The connection isn’t encrypted yet, so use Attic on your home Wi-Fi only. <span id="ix"></span></span></div></div>
         <div class="set-row"><div class="lbl">Requirements</div><div class="ctl" style="flex-direction:column;align-items:flex-end;gap:4px">
           <a href="${HUB_REQUIREMENTS_URL}" target="_blank" rel="noopener">Attic Hub requirements ${U.icon('chevronRight').replace('class="ic"', 'class="ic" style="width:14px;height:14px;vertical-align:-2px"')}</a>
           <a href="${REQUIREMENTS_URL}" target="_blank" rel="noopener">Phase 1A requirements ${U.icon('chevronRight').replace('class="ic"', 'class="ic" style="width:14px;height:14px;vertical-align:-2px"')}</a></div></div>
@@ -267,7 +273,78 @@
     main.querySelector('#signout').onclick = () => ctx.signOut();
     main.querySelector('#chpass').onclick = () => changePassword(acc);
 
+    // Phase 3, 3-5: this PC's updates from the HP.
+    const updRow = main.querySelector('#upd-row');
+    if (updRow) {
+      const D = root.atticDesktop.updates, status = main.querySelector('#upd-status');
+      const checkBtn = main.querySelector('#upd-check'), installBtn = main.querySelector('#upd-install');
+      const pct = u => u.latest && u.latest.size ? Math.floor(100 * u.done / u.latest.size) : 0;
+      const showUpd = u => {
+        if (!u || !status.isConnected) return;
+        const v = u.latest && u.latest.version;
+        const text = {
+          idle: '', checking: 'Checking the HP…',
+          current: v ? `Up to date: ${U.esc(u.current)} is the newest the HP has.` : 'Up to date. The HP has no update to offer yet.',
+          available: `${U.esc(v || '')} is available.`,
+          downloading: `Downloading ${U.esc(v || '')} from the HP… ${pct(u)}%`,
+          waiting: `${U.esc(v || '')} is available. It downloads once the game ends (low-resource mode).`,
+          ready: `${U.esc(v || '')} is ready to install.${u.latest && u.latest.notes ? ` What’s new: ${U.esc(u.latest.notes)}` : ''}${u.canInstall ? '' : ' (The installed Attic Hub only: this is a development copy.)'}`,
+          error: U.esc(u.error || 'Something went wrong.')
+        }[u.status] || '';
+        status.innerHTML = text;
+        status.dataset.status = u.status;
+        installBtn.hidden = !(u.status === 'ready' && u.canInstall);
+        if (v) installBtn.textContent = `Restart to update to ${v}`;
+        checkBtn.disabled = u.status === 'checking' || u.status === 'downloading';
+      };
+      D.get().then(showUpd).catch(() => {});
+      D.onChange(showUpd);
+      checkBtn.onclick = async () => showUpd(await D.check());
+      installBtn.onclick = async () => {
+        const ok = await ui.confirm({ title: 'Restart to update?', confirm: 'Restart and update',
+          lead: 'Attic Hub closes, installs the new version, and opens again in a moment. Transfers in progress pick up where they left off.' });
+        if (!ok) return;
+        const r = await D.install();
+        if (r && r.error) ui.toast(r.error, 'error');
+        else ui.toast('Updating… Attic Hub opens again in a moment');
+      };
+      if (ui.wantUpdates) { ui.wantUpdates = false; updRow.scrollIntoView({ block: 'center' }); } // from the notification
+    }
+
     if (master) {
+      // Phase 3, 3-5: publish an installer to the HP; the HP offers it to every device.
+      const kept = main.querySelector('#upd-kept'), keptRow = main.querySelector('#upd-kept-row');
+      const drawKept = async () => {
+        try {
+          const list = await api.listUpdates();
+          keptRow.hidden = !list.length;
+          kept.innerHTML = list.map(r => `<li><span class="mono">${U.esc(r.version)}</span> · ${U.formatBytes(r.size)} · ${U.esc(U.relDate(r.releaseDate))}${r.notes ? ` · ${U.esc(r.notes)}` : ''}</li>`).join('');
+        } catch (e) { keptRow.hidden = true; }
+      };
+      drawKept();
+      const pick = main.querySelector('#upd-file');
+      main.querySelector('#upd-publish').onclick = () => pick.click();
+      pick.onchange = async () => {
+        const file = pick.files[0];
+        pick.value = '';
+        if (!file) return;
+        if (!/^Attic-Hub-Setup-\d+\.\d+\.\d+\.exe$/.test(file.name)) return ui.toast('Choose the installer as the build names it: Attic-Hub-Setup-<version>.exe', 'error');
+        const notes = await new Promise(resolve => ui.dialog({
+          title: `Publish ${file.name}?`, lead: `${U.formatBytes(file.size)}. The HP checks it’s a newer Attic Hub, then offers it to every device.`,
+          body: '<label class="form-grid"><span>What’s new (optional)</span><input class="plain-input" id="upd-notes" maxlength="500" autocomplete="off"></label>',
+          actions: [
+            { label: 'Cancel', kind: 'secondary', onClick: c => { c(); resolve(null); } },
+            { label: 'Publish', kind: 'primary', onClick: (c, dlg) => { const v = dlg.querySelector('#upd-notes').value; c(); resolve(v); } }
+          ]
+        }));
+        if (notes === null) return;
+        const btn = main.querySelector('#upd-publish'), label = btn.innerHTML;
+        btn.disabled = true;
+        const job = api.publishUpdate(file, { notes: notes.trim(), onProgress: (done, size) => { btn.textContent = `Publishing… ${Math.floor(100 * done / size)}%`; } });
+        try { const r = await job.promise; ui.toast(`Attic Hub ${r.version} is on the HP. Devices will offer it now.`); drawKept(); }
+        catch (e) { ui.toast(e.message, 'error'); }
+        finally { btn.disabled = false; btn.innerHTML = label; }
+      };
       drawShares();
       main.querySelector('#add-share').onclick = () => shareDialog(null, drawShares);
       main.querySelector('#fail').onchange = e => save({ dev: { failRate: e.target.checked ? 0.1 : 0 } }, e.target.checked ? 'Failures on: 10% of requests will fail' : 'Failures off');

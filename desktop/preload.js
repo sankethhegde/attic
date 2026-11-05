@@ -73,6 +73,15 @@ contextBridge.exposeInMainWorld('atticDesktop', {
     get: () => ipcRenderer.invoke('low:get'),
     onChange: cb => { ipcRenderer.removeAllListeners('low:state'); ipcRenderer.on('low:state', (_e, s) => cb(s)); }
   },
+  // Updates from the HP (3-5): the state, Check now, and Restart to update. onOpen: a notification was
+  // clicked, so the interface shows where to install it.
+  updates: {
+    get: () => ipcRenderer.invoke('update:get'),
+    check: () => ipcRenderer.invoke('update:check'),
+    install: () => ipcRenderer.invoke('update:install'),
+    onChange: cb => { ipcRenderer.removeAllListeners('update:state'); ipcRenderer.on('update:state', (_e, s) => cb(s)); },
+    onOpen: cb => { ipcRenderer.removeAllListeners('update:open'); ipcRenderer.on('update:open', () => cb()); }
+  },
   // The end-to-end tests only (ATTIC_TEST_HOOKS=1): the tray menu and the notifications shown.
   test: arg('test') ? {
     tray: () => ipcRenderer.invoke('test:tray'),

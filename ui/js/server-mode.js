@@ -98,10 +98,28 @@
     if (running && !s.server.byHand) out.push(b('restart', 'Restart', 'secondary', 'refresh'), b('stop', 'Stop', 'secondary', 'x'));
     return `<div class="srv-actions">${out.join('')}</div>`;
   }
+  // 3-5: an update for the tool itself, from this PC's own server. Installing stops the service for a
+  // moment and starts it again afterwards.
+  const updates = root.atticDesktop.updates;
+  let upd = null;
+  function updateHTML() {
+    if (!upd || !upd.latest) return '';
+    const v = U.esc(upd.latest.version);
+    if (upd.status === 'downloading') return `<div class="banner banner-info" role="status">${U.icon('download')}<span>Getting Attic Hub ${v} ready… ${upd.latest.size ? Math.floor(100 * upd.done / upd.latest.size) : 0}%</span></div>`;
+    if (upd.status !== 'ready') return '';
+    return `<div class="banner banner-info" role="status">${U.icon('info')}<span>Attic Hub ${v} is ready to install.${upd.canInstall ? ' The server stops for a moment while it installs, then starts again.' : ' (The installed Attic Hub only: this is a development copy.)'}</span>
+      ${upd.canInstall ? '<button type="button" class="btn btn-primary btn-sm" data-act="update">Restart to update</button>' : ''}</div>`;
+  }
+  if (updates) {
+    updates.get().then(u => { upd = u; if (!busy) draw(); }).catch(() => {});
+    updates.onChange(u => { const was = upd && upd.status; upd = u; if (!busy && was !== u.status) draw(); });
+  }
+
   function managedHTML() {
     const s = st.status;
     return `<p class="sub">Every other device reaches Attic through this PC. ${s.task && s.task.ours ? 'It starts with Windows, before anyone signs in, and restarts itself after a crash.' : 'Install it as a service so it starts with Windows, before anyone signs in.'}</p>
       ${banner()}
+      ${updateHTML()}
       ${!st.installable ? `<div class="banner banner-info">${U.icon('info')}<span>This is a development copy. It can start the server for now; installing the service is done from the installed Attic Hub.</span></div>` : ''}
       ${statusRows(s)}
       ${actionsHTML(s)}
@@ -127,6 +145,13 @@
       lead: 'The server stops and no longer starts with Windows. Files, accounts and settings stay where they are. Windows asks for permission.' }))) return;
     if (name === 'stop' && !(await ui.confirm({ title: 'Stop the server?', confirm: 'Stop',
       lead: 'Every device loses Attic until it starts again. Files waiting for a device are kept.' }))) return;
+    if (name === 'update') {
+      if (!(await ui.confirm({ title: `Update to Attic Hub ${upd.latest.version}?`, confirm: 'Restart and update',
+        lead: 'The server stops for a moment while the new version installs, then starts again. Devices reconnect by themselves.' }))) return;
+      const r = await updates.install();
+      msg = r && r.error ? { kind: 'danger', text: r.error } : { kind: 'info', text: 'Updating… Attic Hub opens again in a moment.' };
+      return draw();
+    }
     if (name === 'forget' && !(await ui.confirm({ title: 'Use a different folder?', confirm: 'Choose again',
       lead: 'The server stops, and you choose its folder again. Nothing on disk is deleted.' }))) return;
     busy = true;

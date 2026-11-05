@@ -570,6 +570,33 @@
     hasFileFor: id => sentFiles.has(id),
     // A file sent from File Explorer (3-3) is sent by the desktop tool, which can send it again by its path.
     async hasPathFor(id) { const d = root.atticDesktop && root.atticDesktop.send; return !!(d && await d.hasPath(id)); },
+
+    // ---------- updates (Phase 3, 3-5, T-10; master) ----------
+    // The installers the HP keeps, newest first.
+    async listUpdates() { return http('GET', '/api/updates'); },
+    // Publishes an installer built on this PC (Attic-Hub-Setup-<version>.exe) to the HP, which then offers
+    // it to every device. → { promise (the release), cancel }
+    publishUpdate(file, { notes = '', onProgress = () => {} } = {}) {
+      const xhr = new XMLHttpRequest();
+      return {
+        cancel() { xhr.abort(); },
+        promise: new Promise((resolve, reject) => {
+          xhr.open('PUT', `/api/updates/files/${encodeURIComponent(file.name)}${notes ? '?notes=' + encodeURIComponent(notes) : ''}`);
+          xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+          xhr.setRequestHeader('X-Attic-Upload', '1');
+          xhr.upload.onprogress = e => onProgress(e.loaded, file.size);
+          xhr.onload = () => {
+            let data = null;
+            try { data = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
+            if (xhr.status === 201) return resolve(data);
+            reject(new ApiError((data && data.code) || 'SERVER', (data && data.message) || 'Publishing failed.'));
+          };
+          xhr.onerror = () => reject(new ApiError('UNREACHABLE', 'Could not reach the server.'));
+          xhr.onabort = () => reject(new ApiError('CANCELLED', 'Cancelled'));
+          xhr.send(file);
+        })
+      };
+    },
     isUploading: id => uploads.has(id),
     // `file`: a File the person chose (it must be the same size), else the one this page sent before, or
     // (3-3) the one the desktop tool sent by its path.
