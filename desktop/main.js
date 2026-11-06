@@ -95,7 +95,10 @@ let control = null;         // Server mode's controls (agent/server-control.js),
 const prefsStore = require(path.join(ROOT, 'agent', 'prefs.js')).store(path.join(app.getPath('userData'), 'prefs.json'));
 const { createNotifier, createEventFeed } = require(path.join(ROOT, 'agent', 'notify.js'));
 const ICON = path.join(__dirname, 'build', 'icon.png');
-const STARTED_HIDDEN = process.argv.includes('--hidden'); // started with Windows: straight to the tray
+// Started with Windows: straight to the tray. Also after an update installed itself at sign-in, which leaves
+// a note to come back hidden (0.12.1).
+const RELAUNCH_HIDDEN = path.join(app.getPath('userData'), 'relaunch-hidden');
+const STARTED_HIDDEN = process.argv.includes('--hidden') || (!SUPERVISOR_ARG && (() => { try { fs.rmSync(RELAUNCH_HIDDEN); return true; } catch (e) { return false; } })());
 const TEST_HOOKS = process.env.ATTIC_TEST_HOOKS === '1';  // the end-to-end tests read the tray and notifications
 let prefs = null;
 let tray = null;
@@ -188,7 +191,7 @@ if (SUPERVISOR_ARG) {
     resumeAfterUpdate();
   });
   // "Start now" runs the server as a child of the tool; it stops with the tool.
-  app.on('before-quit', () => { quitting = true; if (control) control.stopChild(); });
+  app.on('before-quit', () => { quitting = true; if (control) control.stopChild(); installOnQuit(); });
 }
 
 // What the window shows first: the choice (first launch), the search for the HP, or the server's screen.
@@ -624,8 +627,15 @@ ipcMain.handle('low:get', e => trusted(e) ? lowOut() : null);
 const { createUpdater } = require(path.join(ROOT, 'agent', 'updater.js'));
 const UPDATE_DIR = path.join(app.getPath('userData'), 'updates');
 const RESUME_FILE = path.join(app.getPath('userData'), 'update-resume.json');
-const CHECK_CLIENT_MS = 6 * 3600e3;  // a client also hears about new releases over the hub at once
-const CHECK_SERVER_MS = 10 * 60e3;   // the HP asks itself, which is cheap
+const CHECK_CLIENT_MS = 4 * 3600e3;  // GitHub, then the HP (which also tells the agent at once)
+const CHECK_SERVER_MS = 3600e3;      // the HP: GitHub hourly (its own copy is cheap to ask)
+// 0.12.1, like PixHaven: GitHub's newest published release (github.com/sankethhegde/attic/releases).
+// Only the installed app asks GitHub; development copies and the tests don't, unless ATTIC_GITHUB_API
+// points them at a stand-in ('off' turns it off anywhere).
+const GITHUB = process.env.ATTIC_GITHUB_API === 'off' ? null
+  : process.env.ATTIC_GITHUB_API ? { api: process.env.ATTIC_GITHUB_API, owner: 'sankethhegde', repo: 'attic' }
+  : app.isPackaged && !TEST_HOOKS ? { owner: 'sankethhegde', repo: 'attic' } : null;
+let installing = false, autoTried = false;
 const canInstall = () => app.isPackaged || (TEST_HOOKS && process.env.ATTIC_DEV_INSTALL === '1');
 let updater = null, checkTimer = 0;
 function updateServer() {
@@ -641,13 +651,18 @@ function updateServer() {
 }
 function getUpdater() {
   if (updater) return updater;
-  updater = createUpdater({ current: app.getVersion(), dir: UPDATE_DIR, server: updateServer, canDownload: () => !low.active, onState: s => {
+  updater = createUpdater({ current: app.getVersion(), dir: UPDATE_DIR, server: updateServer, github: GITHUB, canDownload: () => !low.active, onState: s => {
     if (win && !win.isDestroyed()) win.webContents.send('update:state', updateOut());
     updateTray();
     // Once per version: a notification that it's ready. Clicking it shows where to install it.
     if (s.status === 'ready' && s.latest && prefs.updateShown !== s.latest.version) {
       setPrefs({ updateShown: s.latest.version });
-      notify(`Attic Hub ${s.latest.version} is ready to install`, 'Restart Attic Hub to update. It takes a moment, and everything carries on afterwards.', showUpdates);
+      notify(`Attic Hub ${s.latest.version} is ready`, 'It installs itself the next time Attic Hub starts or quits. To update now, choose Restart to update in the tray.', showUpdates);
+    }
+    // Started with Windows and still in the tray: install now, unseen, and come back hidden.
+    if (s.status === 'ready' && STARTED_HIDDEN && !autoTried && canInstall() && !low.active && win && !win.isVisible() && process.uptime() < 900) {
+      autoTried = true;
+      installUpdate({ hidden: true }).catch(() => {});
     }
   } });
   return updater;
@@ -660,10 +675,11 @@ function scheduleUpdateChecks() {
   clearInterval(checkTimer);
   if (!mode) return;
   const server_ = mode.mode === 'server';
-  checkTimer = setInterval(() => { if (updateServer()) getUpdater().check(); }, server_ ? CHECK_SERVER_MS : CHECK_CLIENT_MS);
+  const ask = () => { if (GITHUB || updateServer()) getUpdater().check(); };
+  checkTimer = setInterval(ask, server_ ? CHECK_SERVER_MS : CHECK_CLIENT_MS);
   checkTimer.unref();
-  // The HP: ask once its server answers. A client hears from the hub as soon as its agent connects.
-  if (server_) setTimeout(() => { if (updateServer()) getUpdater().check(); }, 5000).unref();
+  // Soon after start: GitHub (or the HP, once its server answers or this PC is paired).
+  setTimeout(ask, +process.env.ATTIC_UPDATE_FIRST_MS || (GITHUB ? 30e3 : 5000)).unref(); // tests: sooner
 }
 function showUpdates() {
   showWindow();
@@ -671,10 +687,14 @@ function showUpdates() {
   if (mode && mode.mode === 'server') return; // Server mode's screen shows it at the top
   win.webContents.send('update:open');
 }
-async function installUpdate() {
+// opts.hidden: at sign-in, unseen (the new version starts in the tray). opts.relaunch false: on quit.
+async function installUpdate(opts = {}) {
   if (!canInstall()) return { error: 'Only the installed Attic Hub can update itself: this is a development copy.' };
+  if (installing) return { ok: true };
   const r = await getUpdater().installer();
   if (r.error) return r;
+  installing = true;
+  if (opts.hidden) { try { fs.writeFileSync(RELAUNCH_HIDDEN, '1'); } catch (e) { /* it shows its window instead */ } }
   // The HP: the service runs this same program, so it stops for the update and starts again afterwards.
   if (mode && mode.mode === 'server' && getControl()) {
     try {
@@ -689,6 +709,16 @@ async function installUpdate() {
   setTimeout(quitApp, 300);
   return { ok: true, version: r.version };
 }
+// Quitting Attic Hub with an update downloaded installs it, without starting it again (like PixHaven).
+// Not on the HP: its service runs this program, so the HP updates at sign-in or from Restart to update.
+function installOnQuit() {
+  if (installing || !updater || updater.state.status !== 'ready' || !canInstall() || (mode && mode.mode === 'server')) return;
+  const st = updater.state;
+  const file = path.join(UPDATE_DIR, st.latest.fileName);
+  if (!fs.existsSync(file)) return;
+  installing = true;
+  require('child_process').spawn(file, ['/S', '--updated'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+}
 // After an update on the HP: start the service again.
 async function resumeAfterUpdate() {
   let flag;
@@ -699,7 +729,7 @@ async function resumeAfterUpdate() {
 ipcMain.handle('update:get', e => trusted(e) ? updateOut() : null);
 ipcMain.handle('update:check', async e => {
   if (!trusted(e)) return null;
-  if (!updateServer()) return Object.assign(updateOut(), { status: 'error', error: 'Attic Hub isn’t connected to the HP (or this PC isn’t paired yet).' });
+  if (!GITHUB && !updateServer()) return Object.assign(updateOut(), { status: 'error', error: 'Attic Hub isn’t connected to the HP (or this PC isn’t paired yet).' });
   await getUpdater().check();
   return updateOut();
 });

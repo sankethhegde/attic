@@ -242,6 +242,33 @@ try {
   const narrow = await ev(`const over = [...document.querySelectorAll('.page *')].filter(e => e.getBoundingClientRect().right > innerWidth + 1).map(e => e.className).slice(0, 3);
     return document.documentElement.scrollWidth + 'px wide' + (over.length ? '; over: ' + over.join(', ') : '')`);
   check('at 360px nothing scrolls sideways', narrow === '360px wide', narrow);
+
+  // 5. More than the HP's 50 waiting at once (60 photos from a phone): the Send waits for room as the device
+  // collects, and finishes; with nobody collecting, it stops after the wait and says how many went.
+  await send('Emulation.clearDeviceMetricsOverride');
+  const sendMany = (n, prefix) => ev(`Attic.api.sendRoomWaitMs = 8000;
+    const d = (await Attic.api.listHubDevices()).find(x => x.name === 'ROG Ally');
+    const files = Array.from({ length: ${n} }, (_, i) => ({ name: '${prefix} ' + i + '.jpg', size: 512, source: new File([new Uint8Array(512)], '${prefix} ' + i + '.jpg') }));
+    let room = false;
+    try { const t = await Attic.api.sendToDevice({ files, to: d, onProgress: p => { if (p.phase === 'room') room = true; } }).promise; return { sent: t.length, room }; }
+    catch (e) { return { error: e.message, room }; }`);
+  let collecting = true;
+  const collector = (async () => {
+    // Like a device busy for a moment: it starts collecting once the HP is full.
+    await until(async () => ((await call('hp', 'GET', '/api/transfers?limit=500')).body || []).filter(t => t.status === 'queued' || t.status === 'active').length >= 50, 30000); await sleep(4000); // longer than the Send's 3 s retry, so it meets the limit
+    while (collecting) {
+      const open = ((await call('hp', 'GET', '/api/transfers?limit=500')).body || []).filter(t => t.to === ally.id && t.status === 'queued' && /^Photo /.test(t.fileName));
+      for (const t of open) { await call('ally', 'GET', `/api/transfers/${t.id}/file`); await call('ally', 'POST', `/api/transfers/${t.id}/received`, {}); }
+      await sleep(300);
+    }
+  })();
+  const many = await sendMany(55, 'Photo');
+  collecting = false;
+  await collector;
+  check('55 files to a device that’s collecting: past the HP’s 50 waiting, the Send waits for room and finishes', many && many.sent === 55 && many.room, JSON.stringify(many));
+  const stuck = await sendMany(55, 'Holiday');
+  check('… and with nobody collecting, it stops after the wait, saying how many went', stuck && /^\d+ of 55 files are on their way\. The HP holds 50 files waiting at a time/.test(stuck.error || ''), stuck && stuck.error);
+  for (const t of ((await call('hp', 'GET', '/api/transfers?limit=500')).body || []).filter(t => /^Holiday /.test(t.fileName) && t.status !== 'done')) await call('hp', 'DELETE', `/api/transfers/${t.id}`, {});
 } catch (e) {
   check('test ran to the end', false, e.stack || e.message);
 } finally {

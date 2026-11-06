@@ -4,7 +4,7 @@
   const { util: U, api, ui, background } = root.Attic;
 
   // The interface's version: the desktop tool's when it runs there; the HP serves the same files.
-  const VERSION = '0.12.0';
+  const VERSION = '0.12.2';
   const HUB_REQUIREMENTS_URL = 'https://claude.ai/artifact/PAvQYsCeT2cKm1oApbtzJv';
   const GUIDE_URL = 'https://claude.ai/artifact/1AXNgGjN22Pcmm2HtCqa3p';
 
@@ -128,7 +128,7 @@
       <section class="card" aria-labelledby="h-about">
         <h2 id="h-about">About</h2>
         <div class="set-row"><div class="lbl">Version</div><div class="ctl mono">${VERSION}</div></div>
-        ${root.atticDesktop && root.atticDesktop.updates ? `<div class="set-row" id="upd-row"><div class="lbl" id="h-updates">Updates<small>Attic Hub updates itself from the HP, with no internet needed. A newer version downloads by itself (not while a game runs); you choose when to restart into it. <span id="upd-status" role="status"></span></small></div>
+        ${root.atticDesktop && root.atticDesktop.updates ? `<div class="set-row" id="upd-row"><div class="lbl" id="h-updates">Updates<small>Attic Hub updates itself, like PixHaven: a new version published on GitHub (or, without internet, put on the HP) downloads by itself, not while a game runs, and installs the next time Attic Hub starts or quits. Restart to update installs it now. <span id="upd-status" role="status"></span></small></div>
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="upd-check">${U.icon('refresh')}Check now</button><button class="btn btn-primary btn-sm" id="upd-install" hidden>Restart to update</button></div></div>` : ''}
         <div class="set-row"><div class="lbl">Running in</div><div class="ctl">${root.atticDesktop ? `Attic Hub desktop tool${root.atticDesktop.version ? ` <span class="mono">${U.esc(root.atticDesktop.version)}</span>` : ''}` : 'A web browser'}</div></div>
         <div class="set-row" style="display:block"><div class="banner banner-info" style="margin:0">${U.icon('info')}<span>Files, shares, accounts, devices and transfers are real and live on the HP. <span id="ix-lead">This connection isn’t encrypted, so use Attic on your home Wi-Fi only.</span> <span id="ix"></span></span></div></div>
@@ -339,11 +339,11 @@
         const v = u.latest && u.latest.version;
         const text = {
           idle: '', checking: 'Checking the HP…',
-          current: v ? `Up to date: ${U.esc(u.current)} is the newest the HP has.` : 'Up to date. The HP has no update to offer yet.',
+          current: v ? `Up to date: ${U.esc(u.current)} is the newest version.` : 'Up to date.',
           available: `${U.esc(v || '')} is available.`,
           downloading: `Downloading ${U.esc(v || '')} from the HP… ${pct(u)}%`,
           waiting: `${U.esc(v || '')} is available. It downloads once the game ends (low-resource mode).`,
-          ready: `${U.esc(v || '')} is ready to install.${u.latest && u.latest.notes ? ` What’s new: ${U.esc(u.latest.notes)}` : ''}${u.canInstall ? '' : ' (The installed Attic Hub only: this is a development copy.)'}`,
+          ready: `${U.esc(v || '')} is ready. It installs itself the next time Attic Hub starts or quits.${u.latest && u.latest.notes ? ` What’s new: ${U.esc(u.latest.notes)}` : ''}${u.canInstall ? '' : ' (The installed Attic Hub only: this is a development copy.)'}`,
           error: U.esc(u.error || 'Something went wrong.')
         }[u.status] || '';
         status.innerHTML = text;

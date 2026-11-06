@@ -325,6 +325,7 @@
   const api = {
     ApiError,
     resumable, // 4-2: when files go up in pieces (tests make the pieces small)
+    sendRoomWaitMs: 120e3, // how long a big send waits for the HP's 50-waiting limit to make room (tests shorten it)
     MAX_CUSTOM_BG,
     MAX_BG_BYTES,
 
@@ -785,7 +786,22 @@
             onProgress({ phase: 'fetch', name: f.name, loaded: done, total });
             body = await fetchFromHP(f.entry, f.name);
           }
-          current = await http('POST', '/api/transfers', { to: to.id, fileName: f.name, size: body.size });
+          // The HP holds at most 50 of one account's transfers waiting at once, and since round 1 a send stays
+          // open until the device has collected it. A big batch (60 photos) waits here for room, as the device
+          // collects the earlier ones, for up to `sendRoomWaitMs`; then it stops, saying how many went.
+          for (let waited = 0; ; ) {
+            try { current = await http('POST', '/api/transfers', { to: to.id, fileName: f.name, size: body.size }); break; }
+            catch (err) {
+              if (err.code !== 'TOO_MANY' || cancelled) throw err;
+              if (waited >= api.sendRoomWaitMs) {
+                throw new ApiError('TOO_MANY', `${out.length} of ${files.length} files are on their way. The HP holds 50 files waiting at a time, and ${to.name} hasn’t collected the earlier ones yet${to.online ? '' : ' (it’s offline)'}. Send the rest once it has.`);
+              }
+              onProgress({ phase: 'room', name: f.name, loaded: done, total, waiting: true });
+              await new Promise(r => setTimeout(r, 3000));
+              waited += 3000;
+              if (cancelled) throw new ApiError('CANCELLED', 'Cancelled');
+            }
+          }
           // Kept for this session, so Retry can send it again without asking (a file on the HP is re-read).
           sentFiles.set(current.id, f.source ? { file: f.source } : { entry: f.entry });
           job = putTransferFile(current.id, body, (loaded, st) => onProgress({ phase: 'upload', name: f.name, loaded: done + loaded, total, paused: !!(st && st.paused) }));

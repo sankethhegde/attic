@@ -72,8 +72,8 @@ const env = Object.assign({}, process.env, { ATTIC_INBOX: path.join(tmp, 'inbox'
 
 let tool = null, ws = null, id = 0;
 const pending = {};
-async function launchTool() {
-  tool = spawn(exe || electron, exe ? [`--user-data-dir=${profile}`, `--remote-debugging-port=${CDP_PORT}`] : ['.', `--user-data-dir=${profile}`, `--remote-debugging-port=${CDP_PORT}`], { cwd: desktop, stdio: 'ignore', env });
+async function launchTool(extra = [], moreEnv = {}, dataDir = profile) {
+  tool = spawn(exe || electron, (exe ? [] : ['.']).concat([`--user-data-dir=${dataDir}`, `--remote-debugging-port=${CDP_PORT}`], extra), { cwd: desktop, stdio: 'ignore', env: Object.assign({}, env, moreEnv) });
   let target;
   for (let i = 0; i < 80 && !target; i++) { await sleep(250); try { target = (await (await fetch(`http://127.0.0.1:${CDP_PORT}/json`)).json()).find(t => t.type === 'page'); } catch {} }
   ws = new WebSocket(target.webSocketDebuggerUrl);
@@ -122,7 +122,7 @@ try {
   await until(async () => (await ev(`return (await atticDesktop.server.current()).agent`)) === 'reporting');
   await ev(`document.querySelector('#upd-check').click(); return 1`);
   const s1 = await waitStatus(/^current/);
-  check('Settings → About → Updates: Check now says the HP has nothing to offer yet', /no update to offer/.test(s1 || ''), s1);
+  check('Settings → About → Updates: Check now says it’s up to date when nothing is published', /^current \| Up to date\./.test(s1 || ''), s1);
 
   // 2. The master publishes an installer from Settings (the real upload to the HP).
   await send('DOM.enable');
@@ -138,9 +138,9 @@ try {
   // 3. The HP announces it; the tool downloads it, checks it, and offers it.
   const s3 = await waitStatus(/^ready/);
   const got = path.join(profile, 'updates', 'Attic-Hub-Setup-9.9.9.exe');
-  check('the HP’s announcement starts the download; it’s checked and ready, with what’s new', /9\.9\.9 is ready to install\. What’s new: Faster sending/.test(s3 || '') && fs.existsSync(got) && sha512(got) === sha512(v1), s3);
-  const note = (await T('notes')).find(n => /ready to install/.test(n.title));
-  check('a notification says it’s ready, once', note && note.title === 'Attic Hub 9.9.9 is ready to install', note ? `${note.title}: ${note.body}` : 'none');
+  check('the HP’s announcement starts the download; it’s checked and ready, with what’s new', /9\.9\.9 is ready\. It installs itself the next time Attic Hub starts or quits\. What’s new: Faster sending/.test(s3 || '') && fs.existsSync(got) && sha512(got) === sha512(v1), s3);
+  const note = (await T('notes')).find(n => /^Attic Hub 9\.9\.9 is ready$/.test(n.title));
+  check('a notification says it’s ready, once', note && note.title === 'Attic Hub 9.9.9 is ready' && /installs itself/.test(note.body), note ? `${note.title}: ${note.body}` : 'none');
   const tray = await T('tray');
   check('the tray offers “Restart to update to 9.9.9”', tray.some(i => i.label === 'Restart to update to 9.9.9'), '');
   check('Settings shows Restart to update', await ev(`const b = document.querySelector('#upd-install'); return !b.hidden && b.textContent`) === 'Restart to update to 9.9.9', '');
@@ -174,10 +174,46 @@ try {
   await launchTool();
   await signIn();
   await waitStatus(/^ready/);
-  const repeats = (await T('notes')).filter(n => /ready to install/.test(n.title)).length;
+  const repeats = (await T('notes')).filter(n => /is ready$/.test(n.title)).length;
   check('started again, it doesn’t notify about the same version twice', repeats === 0, `${repeats} repeats`);
+  // Quitting with an update downloaded installs it (0.12.1, like PixHaven), without starting Attic Hub again.
+  fs.rmSync(INSTALL_LOG, { force: true });
   await T('trayClick', 'Quit Attic Hub');
   await until(() => tool.exitCode !== null, 8000);
+  const onQuit = await until(() => fs.existsSync(INSTALL_LOG) && fs.readFileSync(INSTALL_LOG, 'utf8'), 10000);
+  check('quitting Attic Hub with an update downloaded installs it, silently, without starting it again', onQuit && /^\/S --updated\n/.test(onQuit) && !/force-run/.test(onQuit) && onQuit.includes('9.9.10'), onQuit && onQuit.replace(/\s+/g, ' '));
+
+  // 8. GitHub (0.12.1): a published release on a stand-in GitHub, found at a start with Windows (hidden),
+  // downloaded through GitHub's redirect, and installed unseen, coming back hidden.
+  const v3 = fakeFor('9.10.0'), v3bytes = fs.readFileSync(v3), v3sha = sha512(v3);
+  const gh = http.createServer((req, res) => {
+    const port = gh.address().port;
+    if (req.url === '/repos/sankethhegde/attic/releases/latest') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ tag_name: 'v9.10.0', body: 'From GitHub', published_at: new Date().toISOString(), assets: [
+        { name: 'Attic-Hub-Setup-9.10.0.exe', size: v3bytes.length, browser_download_url: `http://127.0.0.1:${port}/dl/Attic-Hub-Setup-9.10.0.exe` },
+        { name: 'latest.yml', size: 200, browser_download_url: `http://127.0.0.1:${port}/dl/latest.yml` }] }));
+    }
+    if (req.url === '/dl/latest.yml') { res.writeHead(200); return res.end(`version: 9.10.0\npath: Attic-Hub-Setup-9.10.0.exe\nsha512: ${v3sha}\n`); }
+    if (req.url === '/dl/Attic-Hub-Setup-9.10.0.exe') { res.writeHead(302, { Location: `http://localhost:${port}/cdn/x.exe` }); return res.end(); }
+    if (req.url === '/cdn/x.exe') { res.writeHead(200, { 'Content-Length': v3bytes.length }); return res.end(v3bytes); }
+    res.writeHead(404); res.end();
+  });
+  await new Promise(r => gh.listen(0, '127.0.0.1', r));
+  fs.rmSync(INSTALL_LOG, { force: true });
+  // A PC not yet connected to any HP, so GitHub is the only source.
+  const fresh = path.join(tmp, 'fresh-profile');
+  fs.mkdirSync(fresh, { recursive: true });
+  fs.writeFileSync(path.join(fresh, 'mode.json'), JSON.stringify({ mode: 'client' }));
+  fs.writeFileSync(path.join(fresh, 'prefs.json'), JSON.stringify({ startWithWindows: false, explorerMenu: false, trayHintShown: true, lowResource: 'off' }));
+  await launchTool(['--hidden'], { ATTIC_GITHUB_API: `http://127.0.0.1:${gh.address().port}`, ATTIC_UPDATE_FIRST_MS: '1500' }, fresh);
+  const hiddenRun = await until(() => fs.existsSync(INSTALL_LOG) && fs.readFileSync(INSTALL_LOG, 'utf8'), 30000);
+  const exited = await until(() => tool.exitCode !== null, 10000);
+  const backHidden = fs.existsSync(path.join(fresh, 'relaunch-hidden'));
+  check('GitHub: a published release is found at a start with Windows, downloaded and installed unseen; Attic Hub comes back hidden',
+    hiddenRun && hiddenRun.startsWith('/S --updated --force-run') && hiddenRun.includes('Attic-Hub-Setup-9.10.0.exe') && exited && backHidden,
+    `${hiddenRun && hiddenRun.replace(/\s+/g, ' ')} · quit ${!!exited} · comes back hidden ${backHidden}`);
+  gh.close();
 } catch (e) {
   check('the test ran to the end', false, e.stack);
 } finally {

@@ -423,3 +423,21 @@ For the final pass: set up Gmail on the HP with a real app password, and reset a
 
 - **A real phone.** Everything above was emulated. Open it on your Pixel or tablet and click through it.
 - **Google Fonts:** keep the link or drop it. It's the only network request, and offline the app falls back to the system font without problems.
+
+## Updates from GitHub, like PixHaven (0.12.1, 6 Nov 2026)
+
+Your request: releasing should be as simple as PixHaven's. Now a version tag makes GitHub build the installer into a draft release; pressing Publish is the only manual step.
+
+| Check | Result | How it was verified |
+| --- | --- | --- |
+| The newest published GitHub release is found | ✅ | `updater.test.js` against a stand-in GitHub: the API, `latest.yml`'s SHA-512, and the installer through a redirect to another host, without the HP's device token |
+| The HP as the fallback | ✅ | Nothing published on GitHub, or GitHub unreachable: the HP's release is used. The HP's older release doesn't undo a newer one from GitHub |
+| Installs when Attic Hub quits | ✅ | `update-test.mjs`: Quit from the tray with an update downloaded ran the installer with `/S --updated`, without starting Attic Hub again |
+| Installs unseen at a start with Windows | ✅ | `update-test.mjs`: a start with `--hidden`, a stand-in GitHub with 9.10.0: found, downloaded and installed with `/S --updated --force-run`, leaving the note to come back hidden |
+| Development copies and the tests never ask the real GitHub | ✅ | Only the installed app does, unless `ATTIC_GITHUB_API` points at a stand-in |
+
+Tests: `node --test "agent/*.test.js"` 54/54, `update-test.mjs` 14/14 on the development build and the packaged app, and every desktop suite. The first release built by GitHub Actions is v0.12.2 (the v0.12.1 build stopped on one of the HP’s timing-sensitive server tests on GitHub’s runner; server tests there are now reported, not blocking).
+
+### More than 50 files at once (6 Nov 2026)
+
+The HP holds at most 50 of one account's transfers waiting at once, and since the relay a send stays open until the device has collected it. The Send dialog now waits for room instead of failing at file 51: "Waiting for ROG Ally to collect earlier files (the HP holds 50 at a time)…". If nothing is collected for two minutes (the device is off), it stops and says how many went. `transfers-test.mjs` (19/19, twice): 55 files to a device that collects them all arrived after waiting for room; with nobody collecting, it stopped with "48 of 55 files are on their way…". The limit itself is the HP's to raise, if you'd like a bigger batch to wait for a device that's off.

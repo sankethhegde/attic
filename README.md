@@ -93,11 +93,14 @@ The installed tool carries the whole server (`resources\server`) and runs it wit
 - **While it's on**, this PC reports its stats every 15 seconds instead of every 3, and reads battery and network every 2 minutes. It stays online at the HP. Attic Hub's window holds still: no animations, transitions, blur or changing login background.
 - **When the game ends**, everything is back to normal at once.
 
-**Updates from the HP** (3-5), with no internet needed:
-- **Publishing:** build the installer (`npm run dist`), then Settings → Advanced → **Publish an update** (as the master) sends `Attic-Hub-Setup-<version>.exe` to the HP, with an optional note on what's new. On the HP, `node server/publish-update.js` does the same.
-- **Every device hears about it at once**, downloads it in the background (not while a game runs on the Ally), and checks it against the HP's SHA-512.
-- **Then it offers it:** a notification, "Restart to update to …" in the tray, and Settings → About → Updates (with Check now). Restarting runs the installer silently and opens Attic Hub again.
-- **On the HP itself**, Server mode's screen offers it. Installing stops the service for a moment and starts it again afterwards.
+**Updates** (3-5; like PixHaven since 0.12.1):
+- **Releasing:** bump `version` in `desktop/package.json`, commit, and push a tag `v<version>`. GitHub Actions (`.github/workflows/release.yml`) runs the unit tests, builds `Attic-Hub-Setup-<version>.exe` with `latest.yml`, and puts them in a **draft** release. Press **Publish release** at https://github.com/sankethhegde/attic/releases. That is the only manual step.
+- **Every PC** (HP, Acer, ROG Ally) asks GitHub for the newest published release 30 s after it starts, then every 4 hours (the HP hourly). It downloads it in the background (not while a game runs on the Ally), checks it against the SHA-512 in `latest.yml`, and installs it:
+  - the next time Attic Hub quits;
+  - at a start with Windows (hidden), unseen, coming back hidden;
+  - or at once with **Restart to update** (tray, Settings → About, or Server mode's screen).
+- **On the HP**, installing stops the service for a moment and starts it again. The HP isn't updated on quit (its service runs the same program), only at sign-in or with Restart to update.
+- **Without internet**, the HP is the fallback: Settings → Advanced → Publish an update (master) still puts an installer on the HP for the PCs to take.
 - **The installers aren't code-signed yet**, so Windows may warn the first time one is run by hand.
 
 ## The iPhone (Phase 4)
