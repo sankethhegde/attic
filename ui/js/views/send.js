@@ -161,7 +161,7 @@
           const pct = p.total ? Math.min(100, p.loaded / p.total * 100) : 100;
           const rate = meter(p.loaded), left = !p.paused && rate ? ui.timeLeft((p.total - p.loaded) / rate) : '';
           // 4-2: a big file goes in pieces; after a drop (Wi-Fi, a locked screen) it waits, then carries on.
-          bar.innerHTML = `<div class="send-progress-top"><span>${p.paused ? `Waiting for the connection… ${U.esc(p.name)} carries on by itself.`
+          bar.innerHTML = `<div class="send-progress-top"><span>${p.phase === 'room' ? `Waiting for ${U.esc(to.name)} to collect earlier files (the HP holds 50 at a time)…` : p.paused ? `Waiting for the connection… ${U.esc(p.name)} carries on by itself.`
             : p.phase === 'fetch' ? `Reading ${U.esc(p.name)} from the HP…` : `Sending ${U.esc(p.name)} to the HP…`}</span>
             <span><span class="mono">${U.formatBytes(p.loaded)} of ${U.formatBytes(p.total)}</span>${rate ? ` · <span class="mono">${U.formatBytes(rate)}/s</span>` : ''}${left ? ` · <b class="send-left">${left}</b>` : ''}</span></div>
             <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}" aria-label="Sending"><span style="width:${pct.toFixed(1)}%"></span></div>`;

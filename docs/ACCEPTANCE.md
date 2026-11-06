@@ -437,3 +437,7 @@ Your request: releasing should be as simple as PixHaven's. Now a version tag mak
 | Development copies and the tests never ask the real GitHub | ✅ | Only the installed app does, unless `ATTIC_GITHUB_API` points at a stand-in |
 
 Tests: `node --test "agent/*.test.js"` 54/54, `update-test.mjs` 14/14 on the development build and the packaged app, and every desktop suite. The first release built by GitHub Actions is v0.12.2 (the v0.12.1 build stopped on one of the HP’s timing-sensitive server tests on GitHub’s runner; server tests there are now reported, not blocking).
+
+### More than 50 files at once (6 Nov 2026)
+
+The HP holds at most 50 of one account's transfers waiting at once, and since the relay a send stays open until the device has collected it. The Send dialog now waits for room instead of failing at file 51: "Waiting for ROG Ally to collect earlier files (the HP holds 50 at a time)…". If nothing is collected for two minutes (the device is off), it stops and says how many went. `transfers-test.mjs` (19/19, twice): 55 files to a device that collects them all arrived after waiting for room; with nobody collecting, it stopped with "48 of 55 files are on their way…". The limit itself is the HP's to raise, if you'd like a bigger batch to wait for a device that's off.
