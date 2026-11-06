@@ -52,7 +52,9 @@ function createNotifier({ show, reveal, openInbox, enabled = () => true, windowM
 }
 
 // Which preference switch each HP event kind falls under. Kinds not listed aren't shown.
-const GROUP = { 'transfer.done': 'transfers', 'transfer.failed': 'transfers', 'device.offline': 'devices', 'device.online': 'devices' };
+// Feedback round 1: a sign-up waiting for the master, and an account approved, are always shown ('accounts').
+const GROUP = { 'transfer.done': 'transfers', 'transfer.failed': 'transfers', 'device.offline': 'devices', 'device.online': 'devices',
+  'account.signup': 'accounts', 'account.approved': 'accounts' };
 const CATCH_UP_SHOWN = 3; // after a restart, more missed events than this become one summary
 
 // opts: { fetchEvents(after) → { events, last, more }, getLast() → seq | null, setLast(seq),

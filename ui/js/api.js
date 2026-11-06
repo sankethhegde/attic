@@ -466,6 +466,34 @@
       return acc;
     },
 
+    // ---------- feedback round 1: emails, forgotten passwords, sign-up (the HP's: PR #28) ----------
+    // An account's email address, where password-reset links go ('' removes it).
+    async updateEmail(id, email) {
+      const acc = await http('PATCH', `/api/accounts/${encodeURIComponent(id)}`, { email });
+      if (me && me.account.id === id) me.account = acc;
+      known = known.map(a => a.id === id ? acc : a);
+      return acc;
+    },
+    // Always the same answer, whether or not the account exists. → { ok, mail, message }
+    forgotPassword(login) { return http('POST', '/api/password/forgot', { login: String(login || '').trim() }); },
+    // The link's token and a new password. → { ok, username, message }
+    resetPassword(token, next) { return http('POST', '/api/password/reset', { token, next }); },
+    // From a paired device; the account waits for the master's approval. → { account, pending, message }
+    signUp({ displayName, username, password, email, deviceType }) {
+      return http('POST', '/api/signup', { displayName: String(displayName || '').trim(), username: String(username || '').trim(), password,
+        email: email ? String(email).trim() : undefined, deviceType: deviceType || undefined });
+    },
+    // Master: accounts waiting for approval are in listDevices() with status 'pending'.
+    async approveAccount(id) { const r = await http('POST', `/api/accounts/${encodeURIComponent(id)}/approve`, {}); known = []; return r; },
+    async declineAccount(id) { const r = await http('POST', `/api/accounts/${encodeURIComponent(id)}/decline`, {}); known = []; return r; },
+    // Master: set someone else's password (they're signed out everywhere).
+    setAccountPassword(id, next) { return http('POST', `/api/accounts/${encodeURIComponent(id)}/set-password`, { next }); },
+    // Master: the HP's Gmail for reset links. → { configured, user, host, port }
+    getMail() { return http('GET', '/api/mail'); },
+    setMail(user, appPassword) { return http('PUT', '/api/mail', { user: String(user || '').trim(), appPassword: String(appPassword || '') }); },
+    testMail(to) { return http('POST', '/api/mail/test', to ? { to } : {}); },
+    removeMail() { return http('DELETE', '/api/mail', {}); },
+
     // Ends this account's other sessions; this one stays signed in.
     async changePassword(id, current, next) {
       await http('POST', `/api/accounts/${encodeURIComponent(id)}/password`, { current, next });

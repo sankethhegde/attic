@@ -147,18 +147,26 @@
       catch (e) { el.innerHTML = ui.errorState(e, 'retry-dev'); el.querySelector('#retry-dev').onclick = loadDevices; return; }
       const D = root.Attic.device;
       const view = ctx.state.settings.devicesView === 'grid' ? 'grid' : 'list';
-      const status = d => d.status === 'active' ? `<span class="tag tag-ok">${U.icon('check')}Active</span>` : `<span class="tag tag-danger">${U.icon('ban')}Revoked</span>`;
+      // Feedback round 1: accounts that signed up wait for approval, listed first.
+      list = list.slice().sort((a, b) => (a.status === 'pending' ? 0 : 1) - (b.status === 'pending' ? 0 : 1));
+      const status = d => d.status === 'pending' ? `<span class="tag tag-warning">${U.icon('clock')}Waiting for approval</span>`
+        : d.status === 'active' ? `<span class="tag tag-ok">${U.icon('check')}Active</span>` : `<span class="tag tag-danger">${U.icon('ban')}Revoked</span>`;
       const seen = d => d.lastSeenAt ? 'Last seen ' + U.relDate(d.lastSeenAt) : 'Never signed in';
-      const owned = d => `<span class="mono">${U.formatCount(d.owned.count)}</span> files, <span class="mono">${U.formatBytes(d.owned.bytes)}</span>`;
+      const owned = d => d.owned ? `<span class="mono">${U.formatCount(d.owned.count)}</span> files, <span class="mono">${U.formatBytes(d.owned.bytes)}</span>` : 'No files yet';
       const seenOn = d => d.lastDeviceType ? `<span style="display:flex;align-items:center;gap:4px">${D.art(d.lastDeviceType, 18)}on a ${D.LABEL[d.lastDeviceType].toLowerCase()}</span>` : '';
-      const actions = d => `${d.status === 'active' ? `<button class="btn btn-secondary btn-sm" data-revoke="${d.id}">${U.icon('ban')}Revoke</button>` : `<button class="btn btn-secondary btn-sm" data-restore="${d.id}">${U.icon('undo')}Restore</button>`}
+      const actions = d => d.status === 'pending'
+        ? `<button class="btn btn-primary btn-sm" data-approve="${d.id}">${U.icon('check')}Approve</button>
+              <button class="btn btn-ghost btn-sm" data-decline="${d.id}" aria-label="Decline ${U.esc(d.displayName)}">${U.icon('x')}Decline</button>`
+        : `${d.status === 'active' ? `<button class="btn btn-secondary btn-sm" data-revoke="${d.id}">${U.icon('ban')}Revoke</button>` : `<button class="btn btn-secondary btn-sm" data-restore="${d.id}">${U.icon('undo')}Restore</button>`}
+              <button class="btn btn-ghost btn-sm" data-setpass="${d.id}" aria-label="Set a new password for ${U.esc(d.displayName)}">${U.icon('lock')}Set password</button>
               <button class="btn btn-ghost btn-sm" data-remove="${d.id}" aria-label="Remove ${U.esc(d.displayName)}">${U.icon('trash')}Remove</button>`;
+      const who = d => `@${U.esc(d.username)}${d.email && d.email !== d.username ? ' · ' + U.esc(d.email) : ''}`;
       // Grid shows the device as its illustration; "other" devices fall back to the desktop drawing.
       const artType = t => D.LABEL[t] ? t : 'desktop';
       const rows = () => `<div class="dev-rows">${list.map(d => `
           <div class="dev-row${d.status === 'revoked' ? ' revoked' : ''}">
             <span class="icon-tile">${U.deviceIcon(d.deviceType)}</span>
-            <span style="min-width:0"><span class="nm">${U.esc(d.displayName)}</span><span class="c" style="display:block">@${U.esc(d.username)}</span><span class="c" style="display:block">${owned(d)}</span></span>
+            <span style="min-width:0"><span class="nm">${U.esc(d.displayName)}</span><span class="c" style="display:block">${who(d)}</span><span class="c" style="display:block">${owned(d)}</span></span>
             <span class="c hide-sm">${seen(d)}${seenOn(d)}</span>
             <span class="c hide-sm dev-added">Added ${U.absDate(d.createdAt)}</span>
             <span>${status(d)}</span>
@@ -168,7 +176,7 @@
           <div class="dev-card${d.status === 'revoked' ? ' revoked' : ''}">
             <div class="dev-card-top"><span class="dev-card-art">${D.art(artType(d.deviceType), 72)}</span>${status(d)}</div>
             <div class="nm">${U.esc(d.displayName)}</div>
-            <div class="c">@${U.esc(d.username)} · ${D.LABEL[d.deviceType] || 'Other device'}</div>
+            <div class="c">${who(d)} · ${D.LABEL[d.deviceType] || 'Other device'}</div>
             <div class="c">${seen(d)}</div>${seenOn(d) ? `<div class="c">${seenOn(d)}</div>` : ''}
             <div class="c">Owns ${owned(d)}</div>
             <div class="c">Added ${U.absDate(d.createdAt)}</div>
@@ -180,6 +188,7 @@
             <button data-dview="list" aria-pressed="${view === 'list'}">${U.icon('list')}<span>List</span></button>
             <button data-dview="grid" aria-pressed="${view === 'grid'}">${U.icon('grid')}<span>Grid</span></button></div>
           <button class="btn btn-primary btn-sm" id="add-dev">${U.icon('plus')}Add device</button></div>
+        ${list.some(d => d.status === 'pending') ? `<div class="banner banner-warning" role="status">${U.icon('user')}<span>${list.filter(d => d.status === 'pending').length === 1 ? 'An account is' : list.filter(d => d.status === 'pending').length + ' accounts are'} waiting for your approval. Approve to let it sign in, or Decline to remove it.</span></div>` : ''}
         <p class="muted" style="font-size:13px;margin:-6px 0 10px">Registered means the account exists — not that the device is online now. Devices shows who’s online now.</p>
         ${list.length ? (view === 'grid' ? cards() : rows())
         : ui.empty({ icon: 'device', title: 'No devices yet', text: 'Give each phone, tablet or laptop its own account, so a lost one can be revoked on its own.' })}`;
@@ -194,6 +203,37 @@
       el.querySelectorAll('[data-revoke]').forEach(b => b.onclick = () => custodyDialog('revoke', list.find(x => x.id === b.dataset.revoke), after));
       el.querySelectorAll('[data-restore]').forEach(b => b.onclick = () => restoreDialog(list.find(x => x.id === b.dataset.restore), after));
       el.querySelectorAll('[data-remove]').forEach(b => b.onclick = () => custodyDialog('remove', list.find(x => x.id === b.dataset.remove), after));
+      // Feedback round 1: sign-ups, and setting a password for someone who forgot theirs.
+      el.querySelectorAll('[data-approve]').forEach(b => b.onclick = async () => {
+        const d = list.find(x => x.id === b.dataset.approve);
+        b.disabled = true;
+        try { await api.approveAccount(d.id); ui.toast(`${d.displayName} can sign in now`); after(); }
+        catch (e) { b.disabled = false; ui.toast(e.message, 'error'); }
+      });
+      el.querySelectorAll('[data-decline]').forEach(b => b.onclick = async () => {
+        const d = list.find(x => x.id === b.dataset.decline);
+        if (!(await ui.confirm({ title: `Decline ${d.displayName}?`, danger: true, confirm: 'Decline', lead: `The account @${U.esc(d.username)} is removed. They can sign up again.` }))) return;
+        try { await api.declineAccount(d.id); ui.toast(`${d.displayName}’s sign-up declined`); after(); }
+        catch (e) { ui.toast(e.message, 'error'); }
+      });
+      el.querySelectorAll('[data-setpass]').forEach(b => b.onclick = () => setPasswordDialog(list.find(x => x.id === b.dataset.setpass)));
+    }
+
+    // The master sets a new password for someone (they forgot theirs); they're signed out everywhere.
+    function setPasswordDialog(d) {
+      ui.dialog({
+        title: `New password for ${d.displayName}`, lead: `@${U.esc(d.username)} is signed out on every device, and signs in again with this password.`,
+        body: '<form id="sp-form" class="form-grid" novalidate><div class="field no-icon"><input id="sp-pass" type="password" placeholder=" " autocomplete="new-password"><label for="sp-pass">New password</label><div class="field-msg" id="sp-msg"></div></div></form>',
+        actions: [
+          { label: 'Cancel', kind: 'secondary' },
+          { label: 'Set password', kind: 'primary', onClick: async (close, dlg) => {
+            const p = dlg.querySelector('#sp-pass').value, msg = dlg.querySelector('#sp-msg');
+            if (p.length < 6) { msg.textContent = 'Use at least 6 characters'; return dlg.querySelector('#sp-pass').focus(); }
+            try { await api.setAccountPassword(d.id, p); close(); ui.toast(`${d.displayName}’s password is set`); }
+            catch (e) { msg.textContent = e.message; }
+          } }
+        ]
+      });
     }
 
     // ---------- storage by owner ----------

@@ -963,3 +963,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   .crumb { min-width: 40px; }
   .dash-link { display: inline-flex; align-items: center; min-height: 40px; }
 }
+/* Sign-in: Forgot password and Create an account (feedback round 1). */
+.lg-links { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 10px; font-size: 14px; }
+.lg-links a { text-decoration: none; }
+.lg-links a[hidden] { display: none; }
