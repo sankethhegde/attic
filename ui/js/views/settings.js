@@ -4,7 +4,7 @@
   const { util: U, api, ui, background } = root.Attic;
 
   // The interface's version: the desktop tool's when it runs there; the HP serves the same files.
-  const VERSION = '0.12.1';
+  const VERSION = '0.12.2';
   const HUB_REQUIREMENTS_URL = 'https://claude.ai/artifact/PAvQYsCeT2cKm1oApbtzJv';
   const GUIDE_URL = 'https://claude.ai/artifact/1AXNgGjN22Pcmm2HtCqa3p';
 

@@ -436,4 +436,4 @@ Your request: releasing should be as simple as PixHaven's. Now a version tag mak
 | Installs unseen at a start with Windows | ✅ | `update-test.mjs`: a start with `--hidden`, a stand-in GitHub with 9.10.0: found, downloaded and installed with `/S --updated --force-run`, leaving the note to come back hidden |
 | Development copies and the tests never ask the real GitHub | ✅ | Only the installed app does, unless `ATTIC_GITHUB_API` points at a stand-in |
 
-Tests: `node --test "agent/*.test.js"` 54/54, `update-test.mjs` 14/14 on the development build and the packaged app, and every desktop suite. The first real release, v0.12.1, is built by GitHub Actions from the tag.
+Tests: `node --test "agent/*.test.js"` 54/54, `update-test.mjs` 14/14 on the development build and the packaged app, and every desktop suite. The first release built by GitHub Actions is v0.12.2 (the v0.12.1 build stopped on one of the HP’s timing-sensitive server tests on GitHub’s runner; server tests there are now reported, not blocking).
