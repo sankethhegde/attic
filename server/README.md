@@ -520,6 +520,48 @@ How it behaves:
 - a slow upload outlasting the idle limit while a silent one is closed;
 - the one-day clean-up.
 
+## Feedback round 1 (server)
+
+Four items from the notes after trying 0.11.0. The interface's half was built on `feedback-1-ui`.
+
+**1. Email addresses as usernames.**
+- A username can now be an email address (up to 254 characters), as well as 3–32 letters, numbers, dots, dashes or underscores.
+- Sign-in matches without regard to case, and takes either the username or the account's email.
+- Every account can have an `email`. A username that's an email address is the account's email unless another is given.
+- `PATCH /api/accounts/:id` changes `displayName` and/or `email`, for yourself, or for anyone if you're the master.
+- Usernames and emails share one name space: no account's username or email can be another's.
+
+**2. Forgot password, by email.** `mail.js` sends mail through Gmail. It's a small SMTP client over TLS on port 465, with no mail library.
+
+The master sets it up once with `PUT /api/mail { user, appPassword }`. The `user` is the Gmail address to send from. The `appPassword` comes from Google Account → Security → 2-Step Verification → App passwords. Google shows it in groups of four letters, and the spaces are ignored. The HP signs in to Gmail with it before keeping it. It's kept in `server/data/mail.json`, which is gitignored with the rest of `data/`, and the API never sends it back:
+- `GET /api/mail` shows `{ configured, user, host, port }`;
+- `POST /api/mail/test` sends a test email to the master;
+- `DELETE /api/mail` forgets it.
+
+Then:
+- **`POST /api/password/forgot { login }`** (the username or the email) always gives the same answer, so it can't reveal which accounts exist. If the account has an email and mail is set up, a link `…/#/reset?token=…` is sent to it.
+  - The token is random and kept only as its SHA-256 (`data/resets.json`). It lasts 30 minutes, works once, and a newer one replaces it.
+  - The link uses the address the request came to, but only if that is one of the HP's own names or addresses, so a forged `Host` header can't point it elsewhere.
+  - Limits: 5 requests per 15 minutes from one device, and 3 emails per hour per account.
+- **`POST /api/password/reset { token, next }`** sets the new password and signs the account out everywhere. Wrong tokens count towards the sign-in lockout.
+- **`POST /api/accounts/:id/set-password { next }`** lets the master set anyone else's password, signing them out. Your own is still changed with your current one.
+
+**3. Sign up, approved by the master.**
+- **`POST /api/signup { displayName, username, password, email?, deviceType? }`**, from a paired device, makes an account with `status: "pending"`.
+- **Signing in before approval** gives `403 PENDING` ("waiting for the master's approval"), and only after the password is right, so it can't be used to probe.
+- **The master is told** with the notification event `account.signup` ("New account waiting for approval").
+- **Deciding:** `POST /api/accounts/:id/approve` makes the account active, and sends `account.approved` to the device it signed up on. `…/decline` removes it.
+- **Limits:** 5 attempts an hour per device, and at most 20 waiting at once.
+
+**4. Faster sends: relayed while they arrive.** A send used to reach the HP whole before the receiving device started, so it took the two legs end to end, about twice as long. Now:
+- **Early start:** as soon as an upload starts arriving (one request or resumable), the receiving agent gets `{"type":"transfer"}` with `active` / `upload`. Its download is fed bytes as they land, and waits when it catches up.
+- **Finishing:** when the upload completes, the transfer is `active` / `deliver`, and the agent's `received` completes it as before.
+- **Failures:** if the upload fails or is cancelled, the download is cut off, and the agent's retry finds the transfer gone. If the receiving device reports it can't save the file, the upload is stopped.
+- **Compatibility:** this needs no change to the agent; it downloads whatever it's told about, and resumes with `Range`.
+- **Measured on loopback:** 8 MB sent over 2.9 s reached the receiver after 0.1 s and finished as the upload did. Real Wi-Fi is still to be measured.
+
+`feedback1.test.js` covers all four. The email part uses a stand-in for Gmail: a local TLS SMTP server, trusted through `ATTIC_MAIL_CA`.
+
 ## Rules that carry over
 
 The contract is fixed: every function in `ui/js/api.js` becomes an endpoint that returns the same JSON shapes the mock returns today.

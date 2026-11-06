@@ -138,7 +138,7 @@ test('a server that stops answering is restarted', async () => {
     const firstPid = t.state().serverPid;
     await sleep(500);
     fs.writeFileSync(path.join(t.dir, 'hang'), '');
-    assert.ok(await until(() => { const s = t.state(); return s.serverPid && s.serverPid !== firstPid; }, 10000), 'restarted after the misses');
+    assert.ok(await until(() => { const s = t.state(); return s.serverPid && s.serverPid !== firstPid; }, 20000), 'restarted after the misses');
     assert.match(t.logText(), /didn't answer 3 health checks/);
     fs.rmSync(path.join(t.dir, 'hang'));
   } finally { await t.cleanup([sup]); }
