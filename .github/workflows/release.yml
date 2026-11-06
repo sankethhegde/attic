@@ -53,6 +53,13 @@ jobs:
           MSG=$(grep -E "^✖" server.log | head -20 | sed -e 's/%/%25/g' -e 's/\r//g' | awk '{printf "%s%%0A", $0}')
           echo "::warning title=Server tests failed on the runner::$MSG"
           exit 1
+      # One draft per tag: made here first, so electron-builder's parallel uploads all find it, rather than
+      # each making its own (v0.12.2 came out as two drafts, the installer in one and the .blockmap in the other).
+      - name: Make the draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --title "${GITHUB_REF_NAME#v}" --notes "Attic Hub ${GITHUB_REF_NAME#v}. Press Publish release: every installed Attic Hub then updates itself."
       - name: Build the installer and upload a draft release
         working-directory: desktop
         run: npx electron-builder --win nsis --publish ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
