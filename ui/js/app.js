@@ -11,8 +11,8 @@
   // Per-tab conveniences (scroll, sort, folder); per browser, not synced between devices.
   const freshTabs = (view) => ({
     files: { view: view || 'list', sort: { key: 'name', dir: 1 }, query: '', lastHash: '#/files' },
-    photos: { sort: 'newest', share: '', query: '' },
-    videos: { sort: 'newest', share: '', query: '' },
+    photos: { sort: 'newest', share: '', query: '', group: 'all', folder: null },
+    videos: { sort: 'newest', share: '', query: '', group: 'all', folder: null },
     other: { sort: 'newest', share: '', query: '' }
   });
   const state = { session: null, account: null, settings: null, needsSetup: false, needsPairing: false, unpaired: false, tabs: freshTabs(), scroll: {}, cameFromDashboard: false };

@@ -191,6 +191,28 @@
     return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0');
   };
 
+  // Time left at the current speed (feedback 1: sending shows how long it will take).
+  ui.timeLeft = (secs) => {
+    if (!isFinite(secs) || secs < 0) return '';
+    if (secs < 10) return 'a few seconds left';
+    if (secs < 60) return 'less than a minute left';
+    const m = Math.round(secs / 60);
+    if (m < 60) return `about ${m} min left`;
+    return `about ${Math.floor(m / 60)} h ${m % 60 ? (m % 60) + ' min ' : ''}left`;
+  };
+  // Speed over the last few seconds, so a moment's stall doesn't swing the estimate. meter(bytesDone) →
+  // bytes a second (0 until there's enough to go on).
+  ui.rateMeter = (windowMs = 5000) => {
+    const pts = [];
+    return (done) => {
+      const now = Date.now();
+      pts.push([now, done]);
+      while (pts.length > 2 && now - pts[0][0] > windowMs) pts.shift();
+      const [t0, d0] = pts[0], dt = (now - t0) / 1000;
+      return dt >= 1 && done > d0 ? (done - d0) / dt : 0;
+    };
+  };
+
   // ---------- virtual list: renders only the rows in view ----------
   // rows: [{ key, h, ... }]; render(row) returns an element positioned by the list.
   ui.virtual = ({ scroller, host, rows, render, overscan }) => {

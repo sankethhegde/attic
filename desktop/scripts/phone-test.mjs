@@ -35,7 +35,7 @@ const BASE = `https://${LAN}:${HTTPS_PORT}/`;
 const share = path.join(tmp, 'share');
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkqPpfDwAE/wH+yZ8VswAAAABJRU5ErkJggg==', 'base64');
 for (const [p, b] of [['Photos/2026/Beach day.png', png], ['Photos/2026/Sunset over the long harbour wall near the old lighthouse.png', png],
-  ['Photos/Family.png', png], ['Videos/Birthday party.mp4', Buffer.alloc(40000, 1)], ['Documents/Tax return 2025 final final (signed copy for the accountant).pdf', Buffer.alloc(9000, 2)],
+  ['Photos/Family.png', png], ['Videos/Birthday party.mp4', fs.readFileSync(path.join(here, 'fixtures', 'clip.mp4'))], ['Videos/Holiday/Beach.mp4', fs.readFileSync(path.join(here, 'fixtures', 'clip.mp4'))], ['Documents/Tax return 2025 final final (signed copy for the accountant).pdf', Buffer.alloc(9000, 2)],
   ['Documents/Notes.txt', Buffer.from('hello')], ['Backups/Ally save files/Elden Ring/ER0000.sl2', Buffer.alloc(3000, 3)]]) {
   fs.mkdirSync(path.dirname(path.join(share, p)), { recursive: true });
   fs.writeFileSync(path.join(share, p), b);
@@ -73,6 +73,7 @@ app.on('certificate-error', (e, wc, url, err, cert, cb) => { const ok = /^Attic 
 app.whenReady().then(() => { const w = new BrowserWindow({ width: 430, height: 900, x: 40, y: 20, webPreferences: { sandbox: true, contextIsolation: true } }); w.loadURL('about:blank'); });`);
 let phone = null, ws = null, id = 0;
 const pending = {};
+let loginField = null;
 const send = (method, params = {}) => new Promise(r => { const i = ++id; pending[i] = r; ws.send(JSON.stringify({ id: i, method, params })); });
 const ev = async expr => {
   const r = await Promise.race([send('Runtime.evaluate', { expression: `(async()=>{${expr}})()`, awaitPromise: true, returnByValue: true }), sleep(20000).then(() => null)]);
@@ -169,6 +170,7 @@ try {
   };
   const signIn = async () => {
     await waitFor(`location.hash === '#/login' && document.querySelector('#lg-user')`);
+    if (!loginField) loginField = await ev(`const i = document.querySelector('#lg-user'); return { label: document.querySelector('label[for=lg-user]').textContent, cap: i.getAttribute('autocapitalize') }`);
     await ev(`const f = document.querySelector('.login-card'); document.querySelector('#lg-master').click();
       f.querySelector('#lg-user').value = 'master'; f.querySelector('#lg-pass').value = 'test1234'; f.requestSubmit(); return 1`);
     return waitFor(`location.hash === '#/dashboard' && location.protocol`);
@@ -269,6 +271,9 @@ try {
     const n = await send('DOM.querySelector', { nodeId: doc.result.root.nodeId, selector });
     return send('DOM.setFileInputFiles', { nodeId: n.result.nodeId, files });
   };
+  // Smaller pieces than the 32 MB the app uses, so a 24–40 MB file goes in several and the drop lands
+  // between them (the emulated slow network reports a single piece's progress all at once).
+  await ev(`Attic.api.resumable.chunk = 4 * 1024 * 1024; return 1`);
   await go('#/files/main/Videos');
   await waitFor(`document.querySelector('#fupload')`);
   await slow();
@@ -297,6 +302,7 @@ try {
   await ev(`const d = [...document.querySelectorAll('.send-dev')].find(b => /ROG Ally/.test(b.textContent)); if (!d.classList.contains('on')) d.click(); return 1`);
   await slow();
   await ev(`document.querySelector('.dialog-actions [data-i="1"]').click(); return 1`);
+  const etaP = waitFor(`(() => { const t = document.querySelector('#sd-progress'); return t && / left/.test(t.textContent) && t.textContent.replace(/\\s+/g, ' ').trim(); })()`, 20000);
   await waitFor(`(() => { const m = document.querySelector('#sd-progress .meter'); return m && +m.getAttribute('aria-valuenow') >= 15; })()`, 20000);
   const sDrop = drop(4000);
   const sWait = await waitFor(`(() => { const t = document.querySelector('#sd-progress'); return t && /Waiting for the connection/.test(t.textContent) && t.textContent.trim().slice(0, 60); })()`, 6000);
@@ -308,6 +314,80 @@ try {
     res => { const c = []; res.on('data', d => c.push(d)); res.on('end', () => resolve(Buffer.concat(c))); }).on('error', reject));
   check('sending a video to the ROG Ally from the phone: picked as photos or files, paused by the drop, then delivered whole',
     pickLabel === 'Choose photos or files' && sWait && got && sha(got) === sha(fs.readFileSync(clip)), `“${pickLabel}”; “${sWait}”; ${got ? got.length + ' bytes, intact ' + (sha(got) === sha(fs.readFileSync(clip))) : 'not queued'}`);
+  const eta = await etaP;
+  check('sending shows how long it will take', eta && /(about \d+ (min|h)|less than a minute|a few seconds) left/.test(eta), eta);
+
+  // 6. Feedback 1 (6 Nov 2026).
+  await emulate(390, 844);
+  const tap = async sel => {
+    // A click that counts as the person's own tap (userGesture), so a video may start playing from it,
+    // as it would from a real tap. (Synthetic mouse events stall under touch emulation.)
+    const r = await Promise.race([send('Runtime.evaluate', { expression: `(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return false; e.scrollIntoView({ block: 'center' }); e.click(); return true; })()`,
+      userGesture: true, returnByValue: true }), sleep(10000).then(() => null)]);
+    return !!(r && r.result && r.result.result && r.result.result.value);
+  };
+  // Files: This PC, then the drive, then its shared folder; Back goes up a level.
+  await go('#/files');
+  const drives = await waitFor(`document.querySelector('.drive-card') && [...document.querySelectorAll('.drive-card .nm')].map(n => n.textContent).join(' | ')`);
+  await look('files-drives-390');
+  await tap('.drive-card');
+  const inDrive = await waitFor(`location.hash.startsWith('#/files?drive=') && document.querySelector('.share-row-btn') && document.querySelector('.share-row-btn').textContent.replace(/\\s+/g, ' ').trim()`);
+  await look('files-drive-390');
+  await tap('.share-row-btn');
+  await waitFor(`location.hash === '#/files/main' && document.querySelector('#fback')`);
+  const backTop = await waitFor(`document.querySelector('#fback-label') && document.querySelector('#fback-label').textContent !== 'Back' && document.querySelector('#fback-label').textContent`);
+  await go('#/files/main/Photos/2026');
+  await waitFor(`document.querySelector('#fback-label') && document.querySelector('#fback-label').textContent === 'Photos'`);
+  await tap('#fback');
+  const upHash = await waitFor(`location.hash === '#/files/main/Photos' && location.hash`);
+  check('Files is like File Explorer: This PC → the drive → its shared folders; Back goes up one level', /\(C:\)/.test(drives || '') && /Main drive/.test(inDrive || '') && backTop === 'C:' && upHash,
+    `drives “${drives}”; on C: “${inDrive}”; Back at the top says “${backTop}”; from 2026 Back went to ${upHash}`);
+  // Photos: All or By folder.
+  await go('#/photos');
+  await tap('[data-group="folder"]');
+  const tiles = await waitFor(`document.querySelectorAll('.ftile').length >= 2 && [...document.querySelectorAll('.ftile .nm')].map(n => n.textContent).join(', ')`);
+  await look('photos-folders-390');
+  await ev(`[...document.querySelectorAll('.ftile')].find(t => /2026/.test(t.textContent)).click(); return 1`);
+  const inside = await waitFor(`document.querySelector('#mback') && document.querySelectorAll('.ptile').length`);
+  await tap('#mback');
+  const backToTiles = await waitFor(`document.querySelectorAll('.ftile').length >= 2`);
+  await tap('[data-group="all"]');
+  const allAgain = await waitFor(`!document.querySelector('.ftile') && document.querySelectorAll('.ptile').length`);
+  check('Photos: All or By folder; a folder opens its photos, with a way back', tiles && inside === 2 && backToTiles && allAgain === 3, `folders: ${tiles}; in 2026: ${inside}; all: ${allAgain}`);
+  // Videos: real thumbnails, one tap to play.
+  await go('#/videos');
+  const thumbs = await waitFor(`(() => { const v = [...document.querySelectorAll('.vcard')].filter(c => /Beach|Birthday/.test(c.textContent)).map(c => c.querySelector('.vthumb')); return v.length === 2 && v.every(x => x.readyState >= 2 && x.videoWidth > 0) && v.length; })()`, 15000);
+  await look('videos-390');
+  await ev(`[...document.querySelectorAll('.vcard')].find(c => /Beach/.test(c.textContent)).id = 'beach-card'; return 1`);
+  await tap('#beach-card');
+  const playing = await waitFor(`(() => { const v = document.querySelector('.dialog video'); return v && !v.paused && v.currentTime > 0 && 'playing'; })()`, 8000);
+  await closeDialog();
+  await ev(`document.querySelectorAll('video').forEach(v => v.pause()); return 1`);
+  check('Videos: each shows a frame from the video, and one tap plays it', thumbs === 2 && playing === 'playing', `thumbnails decoded: ${thumbs}; after one tap: ${playing}`);
+  await tap('[data-group="folder"]');
+  const vFolders = await waitFor(`document.querySelectorAll('.ftile').length === 2 && [...document.querySelectorAll('.ftile .nm')].map(n => n.textContent).join(', ')`);
+  check('Videos: By folder too', vFolders, vFolders);
+  await tap('[data-group="all"]');
+  // Files: Play beside Download for a video.
+  await go('#/files/main/Videos');
+  await waitFor(`document.querySelector('button.row')`);
+  await ev(`[...document.querySelectorAll('button.row')].find(r => /Birthday/.test(r.textContent)).click(); return 1`);
+  await waitFor(`document.querySelector('.panel #play')`, 5000);
+  const panelBtns = await ev(`return [...document.querySelectorAll('.panel-actions .btn')].map(b => b.textContent.trim()).join(' · ')`);
+  await tap('.panel #play');
+  const fplay = await waitFor(`(() => { const v = document.querySelector('.dialog video'); return v && !v.paused && 'playing'; })()`, 8000);
+  await closeDialog();
+  await ev(`document.querySelectorAll('video').forEach(v => v.pause()); const c = document.querySelector('#panel-close'); if (c) c.click(); return 1`);
+  check('Files: a video has Play beside Download, and it plays', /Play/.test(panelBtns) && /Download/.test(panelBtns) && fplay === 'playing', `${panelBtns}; ${fplay}`);
+  // Dashboard: the shares and the storage bar open what they show.
+  await go('#/dashboard');
+  const dashInfo = await waitFor(`document.querySelector('a.share-row-link') && JSON.stringify({ share: document.querySelector('a.share-row-link').getAttribute('href'), seg: document.querySelectorAll('.segbar .s.go').length, files: (document.querySelector('a.dash-link') || {}).textContent })`);
+  await tap('a.share-row-link');
+  const dashTo = await waitFor(`location.hash === '#/files/main' && location.hash`);
+  check('Dashboard: a share row opens it in Files; the storage bar and file count are links too', dashInfo && dashTo && JSON.parse(dashInfo).seg > 0, `${dashInfo} → ${dashTo}`);
+  // Usernames: email addresses allowed, and the phone doesn't capitalise them.
+  check('the username field takes an email address and the phone doesn’t capitalise it', loginField && loginField.label === 'Username or email' && loginField.cap === 'none', JSON.stringify(loginField));
+
   const all = Object.entries(measured);
   const wide = all.filter(([, m]) => m.scrollW > m.W + 1 || m.over.length);
   check('no view or dialog is wider than the screen, at 390 px or 320 px', !wide.length, wide.map(([k, m]) => `${k}: ${m.scrollW}/${m.W} ${m.over.slice(0, 2).join(' ')}`).join(' ; ') || `${all.length} screens`);

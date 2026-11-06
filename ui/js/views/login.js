@@ -22,10 +22,14 @@
     });
   }
 
+  // A username: 3–32 letters, numbers, dots, dashes or underscores, or an email address (feedback 1;
+  // the HP must accept it too).
+  const USERNAME_OK = u => /^[a-zA-Z0-9._-]{3,32}$/.test(u) || /^[^\s@]{1,64}@[^\s@]+\.[^\s@]{2,}$/.test(u) && u.length <= 254;
+
   function field({ id, label, type, icon, autocomplete, eye, value }) {
     return `<div class="field${eye ? ' has-eye' : ''}${icon ? '' : ' no-icon'}" data-field="${id}">
       ${icon ? U.icon(icon) : ''}
-      <input id="${id}" name="${id}" type="${type || 'text'}" placeholder=" " autocomplete="${autocomplete || 'off'}" spellcheck="false" value="${U.esc(value || '')}" aria-describedby="${id}-msg">
+      <input id="${id}" name="${id}" type="${type || 'text'}" placeholder=" " autocomplete="${autocomplete || 'off'}" spellcheck="false"${autocomplete === 'username' ? ' autocapitalize="none" autocorrect="off"' : ''} value="${U.esc(value || '')}" aria-describedby="${id}-msg">
       <label for="${id}">${label}</label>
       ${eye ? `<button type="button" class="icon-btn eye" aria-label="Show password" aria-pressed="false">${U.icon('eye')}</button>` : ''}
       <div class="field-msg" id="${id}-msg" aria-live="polite"></div>
@@ -69,7 +73,7 @@
         <h1>Set up Attic</h1>
         <p class="sub">Create the master account. It sees every share and manages every device. You’ll only do this once.</p>
         ${field({ id: 'su-name', label: 'Display name', icon: 'user', autocomplete: 'name' })}
-        ${field({ id: 'su-user', label: 'Username', icon: 'user', autocomplete: 'username' })}
+        ${field({ id: 'su-user', label: 'Username or email', icon: 'user', autocomplete: 'username' })}
         ${field({ id: 'su-pass', label: 'Password', type: 'password', icon: 'lock', eye: true, autocomplete: 'new-password' })}
         ${field({ id: 'su-pass2', label: 'Confirm password', type: 'password', icon: 'lock', eye: true, autocomplete: 'new-password' })}
         <button class="btn btn-primary btn-block" type="submit" style="height:48px;margin-top:6px">Create master account</button>
@@ -89,7 +93,7 @@
       const errs = {};
       if (!v('su-name').trim()) errs['su-name'] = 'Enter a display name';
       if (!v('su-user').trim()) errs['su-user'] = 'Choose a username';
-      else if (!/^[a-zA-Z0-9._-]{3,32}$/.test(v('su-user').trim())) errs['su-user'] = 'Use 3–32 letters, numbers, dots, dashes or underscores';
+      else if (!USERNAME_OK(v('su-user').trim())) errs['su-user'] = 'Use 3–32 letters, numbers, dots, dashes or underscores, or an email address';
       if (!v('su-pass')) errs['su-pass'] = 'Choose a password';
       else if (v('su-pass').length < 6) errs['su-pass'] = 'Use at least 6 characters';
       if (!errs['su-pass'] && v('su-pass2') !== v('su-pass')) errs['su-pass2'] = 'Passwords don’t match';
@@ -121,7 +125,7 @@
         <h1 id="lg-title"></h1>
         <p class="sub" id="lg-sub"></p>
         <div id="lg-device" class="lg-device"></div>
-        ${field({ id: 'lg-user', label: 'Username', icon: 'user', autocomplete: 'username', value: opts.username })}
+        ${field({ id: 'lg-user', label: 'Username or email', icon: 'user', autocomplete: 'username', value: opts.username })}
         ${field({ id: 'lg-pass', label: 'Password', type: 'password', icon: 'lock', eye: true, autocomplete: 'current-password' })}
         <div class="opts-row"><label class="check"><input type="checkbox" id="lg-stay"> Stay signed in</label>
           <span class="field-hint" id="caps" hidden>Caps Lock is on</span></div>

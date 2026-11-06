@@ -25,10 +25,15 @@
     return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   }
 
+  // A video's own frame as its thumbnail: the browser fetches just enough of the file to show the frame
+  // at 1 s. Only the cards on screen exist (the list is virtual), so only they load.
+  const thumb = e => `<video class="vthumb" muted playsinline preload="metadata" tabindex="-1" aria-hidden="true" src="${api.mediaUrl(e)}#t=1"></video>`;
+
   function revealButton(e) { return `<button class="btn btn-secondary" data-reveal="${e.id}">${U.icon('reveal')}Reveal in Files</button>`; }
   function reveal(ctx, e) { ctx.go(files.folderHash(e.share, e.path, e.id)); }
 
-  function detailDialog(ctx, e, shares) {
+  // play: start at once (one tap from Videos, or Play in Files: feedback 1).
+  function detailDialog(ctx, e, shares, play) {
     const share = shares.find(s => s.id === e.share) || { name: e.share, rootPath: '' };
     const full = share.rootPath + '\\' + U.joinPath(e.path, e.name).replace(/\//g, '\\');
     const isVideo = e.category === 'videos', isAudio = e.category === 'audio';
@@ -56,6 +61,7 @@
         const dur = dlg.querySelector('#dur');
         m.onloadedmetadata = () => { dur.textContent = ui.formatDuration(m.duration) || 'Unknown'; };
         m.onerror = () => { dur.textContent = 'Unknown'; m.hidden = true; dlg.querySelector('#cant-play').hidden = false; };
+        if (play) m.play().catch(() => { /* the browser wants a tap on the player first */ });
       }
     });
     return d;
@@ -110,6 +116,7 @@
         ${tab === 'other' ? `<div class="seg" role="group" aria-label="View">
           <button data-oview="list" aria-pressed="${state.settings.otherView !== 'grid'}">${U.icon('list')}<span>List</span></button>
           <button data-oview="grid" aria-pressed="${state.settings.otherView === 'grid'}">${U.icon('grid')}<span>Grid</span></button></div>` : ''}
+        ${tab !== 'other' ? `<div class="seg" role="group" aria-label="Show"><button data-group="all" aria-label="All" title="All" aria-pressed="${ts.group !== 'folder'}">${U.icon('grid')}<span>All</span></button><button data-group="folder" aria-label="By folder" title="By folder" aria-pressed="${ts.group === 'folder'}">${U.icon('folder')}<span>By folder</span></button></div>` : ''}
         ${tab === 'photos' ? `<div class="seg" role="group" aria-label="Thumbnail size">${[['s', 'S'], ['m', 'M'], ['l', 'L']].map(([v, l]) => `<button data-size="${v}" aria-pressed="${state.settings.photoSize === v}" aria-label="${{ s: 'Small', m: 'Medium', l: 'Large' }[v]} thumbnails">${l}</button>`).join('')}</div>` : ''}
       </div></div><div id="body"></div></div>`;
     const body = main.querySelector('#body');
@@ -132,7 +139,23 @@
       if (vl) { vl.destroy(); vl = null; }
       const q = (ts.query || '').toLowerCase();
       view = all.filter(e => (!ts.share || e.share === ts.share) && (!q || e.name.toLowerCase().includes(q))).sort(sorter(ts.sort));
-      main.querySelector('#mcount').textContent = `${U.formatCount(view.length)} ${conf.noun}${view.length === 1 ? '' : 's'}`;
+      // By folder (feedback 1): the folders first, as tiles; one opened shows only its own.
+      const byFolder = tab !== 'other' && ts.group === 'folder';
+      const folderKey = e => e.share + '|' + (e.path || '');
+      let folders = null, inFolder = null;
+      if (byFolder && ts.folder) {
+        const inIt = view.filter(e => folderKey(e) === ts.folder);
+        if (inIt.length) { inFolder = ts.folder; view = inIt; } else ts.folder = null;
+      }
+      if (byFolder && !inFolder) {
+        const m = new Map();
+        for (const e of view) { const k = folderKey(e); if (!m.has(k)) m.set(k, { key: k, share: e.share, path: e.path || '', items: [] }); m.get(k).items.push(e); }
+        folders = [...m.values()].sort((a, b) => ts.sort === 'name' ? (a.path || '').localeCompare(b.path || '') : b.items[0].modifiedAt.localeCompare(a.items[0].modifiedAt));
+      }
+      const shareName = id => { const sh = shares.find(x => x.id === id); return sh ? sh.name : id; };
+      const folderName = fo => fo.path ? fo.path.split('/').pop() : shareName(fo.share);
+      const folderWhere = fo => shareName(fo.share) + (fo.path ? ' / ' + fo.path : '');
+      main.querySelector('#mcount').textContent = folders ? `${U.formatCount(folders.length)} folder${folders.length === 1 ? '' : 's'}` : `${U.formatCount(view.length)} ${conf.noun}${view.length === 1 ? '' : 's'}`;
       const off = shares.filter(s => !s.available);
       const note = off.length ? `<div class="banner banner-warning">${U.icon('cloudOff')}<span>${off.map(s => U.esc(s.name)).join(', ')} ${off.length === 1 ? 'is' : 'are'} unavailable, so ${off.length === 1 ? 'its' : 'their'} ${conf.noun}s aren’t shown.</span></div>` : '';
       if (!all.length) { body.innerHTML = note + ui.empty({ icon: conf.icon, title: `No ${conf.noun}s yet`, text: conf.empty }); return; }
@@ -142,13 +165,20 @@
         body.querySelector('#reset').onclick = () => { ts.query = ''; ts.share = ''; shareSel.value = ''; setSearch(); draw(); };
         return;
       }
-      body.innerHTML = note + '<div class="vlist" role="list"></div>';
+      const openF = inFolder ? { share: view[0].share, path: view[0].path || '' } : null;
+      body.innerHTML = note + (openF ? `<div class="folder-bar"><button class="btn btn-ghost btn-sm back-btn" id="mback">${U.icon('chevronLeft')}<span>All folders</span></button><span class="folder-bar-nm"><b>${U.esc(folderName(openF))}</b><span class="muted">${U.esc(folderWhere(openF))}</span></span></div>` : '') + '<div class="vlist" role="list"></div>';
+      if (openF) body.querySelector('#mback').onclick = () => { ts.folder = null; main.scrollTop = 0; draw(); };
       const host = body.querySelector('.vlist');
       const w = host.clientWidth;
       const mobile = matchMedia('(max-width: 720px)').matches;
       let rows = [];
 
-      if (tab === 'photos') {
+      if (folders) {
+        const gap = 14, cols = Math.max(2, Math.floor((w + gap) / ((mobile ? 150 : 220) + gap)));
+        const tileW = (w - gap * (cols - 1)) / cols;
+        const h = Math.round(tileW * (tab === 'videos' ? 9 / 16 : 1) + 58) + gap;
+        for (let i = 0; i < folders.length; i += cols) rows.push({ key: 'f' + i, h, folders: folders.slice(i, i + cols), cols, gap });
+      } else if (tab === 'photos') {
         const gap = 6, target = PHOTO_SIZES[state.settings.photoSize] * (mobile ? 0.7 : 1);
         const cols = Math.max(3, Math.floor((w + gap) / (target + gap)));
         const tile = (w - gap * (cols - 1)) / cols;
@@ -182,6 +212,13 @@
       vl = ui.virtual({
         scroller: main, host, rows,
         render: (r) => {
+          if (r.folders) {
+            const d = ui.el(`<div class="pgrid-row" style="grid-template-columns:repeat(${r.cols},minmax(0,1fr));gap:${r.gap}px;padding-bottom:${r.gap}px"></div>`);
+            d.innerHTML = r.folders.map(fo => `<button class="ftile${tab === 'videos' ? ' wide' : ''}" data-folder="${U.esc(fo.key)}" aria-label="${U.esc(folderName(fo))}, ${fo.items.length} ${conf.noun}${fo.items.length === 1 ? '' : 's'}">
+              <span class="cover" ${tab === 'photos' ? `style="${ui.bgStyle(fo.items[0])}"` : ''}>${tab === 'videos' ? thumb(fo.items[0]) : ''}<span class="fbadge">${U.icon('folder')}${U.formatCount(fo.items.length)}</span></span>
+              <span class="meta"><span class="nm">${U.esc(folderName(fo))}</span><span class="c">${U.esc(folderWhere(fo))}</span></span></button>`).join('');
+            return d;
+          }
           if (r.head) return ui.el(`<div class="${tab === 'other' ? 'group-head' : 'date-head'}"><span>${U.esc(r.head.label)}</span><span class="n">${U.formatCount(r.head.items.length)}</span></div>`);
           if (tab === 'photos') {
             const d = ui.el(`<div class="pgrid-row" style="grid-template-columns:repeat(${r.cols},minmax(0,1fr));gap:6px"></div>`);
@@ -190,7 +227,7 @@
           }
           if (tab === 'videos') {
             const d = ui.el(`<div class="pgrid-row" style="grid-template-columns:repeat(${r.cols},minmax(0,1fr));gap:${r.gap}px;padding-bottom:${r.gap}px"></div>`);
-            d.innerHTML = r.items.map(e => `<button class="vcard" data-id="${e.id}"><span class="poster"><span class="play">${U.icon('play')}</span></span>
+            d.innerHTML = r.items.map(e => `<button class="vcard" data-id="${e.id}" aria-label="Play ${U.esc(e.name)}"><span class="poster">${thumb(e)}<span class="play">${U.icon('play')}</span></span>
               <span class="meta"><span class="nm">${U.nameHTML(e.name)}</span><span class="c" style="display:block">${U.relDate(e.modifiedAt)} · <span class="mono">${U.formatBytes(e.size)}</span></span></span></button>`).join('');
             return d;
           }
@@ -216,11 +253,13 @@
         }
       });
       host.onclick = (ev) => {
+        const fo = ev.target.closest('[data-folder]');
+        if (fo) { ts.folder = fo.dataset.folder; main.scrollTop = 0; draw(); return; }
         const t = ev.target.closest('[data-id]');
         if (!t) return;
         const idx = view.findIndex(x => x.id === t.dataset.id);
         if (tab === 'photos') lightbox(ctx, view, idx, (last) => { vl.scrollToKey(rows.find(r => r.items && r.items.includes(last)).key); const n = host.querySelector(`[data-id="${last.id}"]`); if (n) n.focus(); });
-        else detailDialog(ctx, view[idx], shares);
+        else detailDialog(ctx, view[idx], shares, tab === 'videos');
       };
     }
 
@@ -235,6 +274,12 @@
       draw();
       api.updateSettings({ otherView: b.dataset.oview }).catch(() => {});
     });
+    main.querySelectorAll('[data-group]').forEach(b => b.onclick = () => {
+      ts.group = b.dataset.group; ts.folder = null;
+      main.querySelectorAll('[data-group]').forEach(x => x.setAttribute('aria-pressed', x === b));
+      main.scrollTop = 0;
+      draw();
+    });
     main.querySelectorAll('[data-size]').forEach(b => b.onclick = async () => {
       state.settings.photoSize = b.dataset.size;
       main.querySelectorAll('[data-size]').forEach(x => x.setAttribute('aria-pressed', x === b));
@@ -246,5 +291,5 @@
     await load();
   }
 
-  root.Attic.media = { render };
+  root.Attic.media = { render, play: (ctx, e, shares) => detailDialog(ctx, e, shares, true) };
 })(window);

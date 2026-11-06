@@ -11,16 +11,18 @@
   // ---------- breadcrumbs: collapse the middle, keep share root and current folder ----------
   function crumbsHTML(share, path) {
     const segs = path ? path.split('/') : [];
+    const drive = driveOf(share);
     const items = [{ label: share.name, path: '' }].concat(segs.map((s, i) => ({ label: s, path: segs.slice(0, i + 1).join('/') })));
     const sep = `<span class="crumb-sep">${U.icon('chevronRight')}</span>`;
     const btn = (it, cur) => `<button class="crumb${cur ? ' current' : ''}" ${cur ? 'aria-current="page"' : `data-path="${U.esc(it.path)}"`} title="${U.esc(it.label)}">${U.esc(it.label)}</button>`;
     let shown = items, hidden = [];
     if (items.length > 3) { hidden = items.slice(1, -1); shown = [items[0], null, items[items.length - 1]]; }
-    return `<div class="crumbs">${shown.map((it, i) => (i ? sep : '') + (it ? btn(it, i === shown.length - 1) : `<button class="crumb" data-more aria-label="Show ${hidden.length} hidden folders" aria-haspopup="menu" aria-expanded="false">…</button>`)).join('')}</div>`;
+    return `<div class="crumbs"><button class="crumb" data-drive="${U.esc(drive)}" title="${U.esc(drive)}">${U.esc(drive)}</button>${sep}${shown.map((it, i) => (i ? sep : '') + (it ? btn(it, i === shown.length - 1) : `<button class="crumb" data-more aria-label="Show ${hidden.length} hidden folders" aria-haspopup="menu" aria-expanded="false">…</button>`)).join('')}</div>`;
   }
   function wireCrumbs(container, share, path, go) {
     const segs = path ? path.split('/') : [];
     container.querySelectorAll('.crumb[data-path]').forEach(b => b.onclick = () => go(folderHash(share.id, b.dataset.path)));
+    container.querySelectorAll('.crumb[data-drive]').forEach(b => b.onclick = () => go(drivesHash(b.dataset.drive)));
     container.querySelectorAll('.crumb[data-more]').forEach(b => b.onclick = () => {
       const hidden = segs.slice(0, -1).map((s, i) => ({ label: s, path: segs.slice(0, i + 1).join('/') }));
       ui.menu(b, hidden.map((h, i) => `<button class="menu-item" role="menuitem" data-path="${U.esc(h.path)}" style="padding-left:${12 + i * 10}px">${U.icon('folder')}${U.esc(h.label)}</button>`).join(''),
@@ -73,47 +75,65 @@
       ${owners && inCustody(e) ? `<div class="banner banner-info" style="margin-bottom:12px">${U.icon('undo')}<span>Held in custody for <b>${U.esc(ownerLabel(e.uploadedBy, owners))}</b>. It goes back if that account is restored.</span></div>
         <button class="btn btn-secondary btn-block" id="keep-perm" style="margin-bottom:10px">${U.icon('lock')}Keep permanently</button>` : ''}
       <div class="panel-actions">
+        ${e.category === 'videos' || e.category === 'audio' ? `<button class="btn btn-primary" id="play">${U.icon('play')}Play</button>` : ''}
         <a class="btn btn-secondary" href="${U.esc(api.downloadUrl(e))}" download="${U.esc(e.name)}">${U.icon('download')}Download</a>
         <button class="btn btn-secondary" id="send-dev">${U.icon('transfer')}Send to device</button>
       </div></aside>`;
   }
 
-  // ---------- share picker ----------
-  async function renderShares(ctx) {
+  // ---------- drives, then the shared folders on one (feedback 1: like File Explorer's "This PC") ----------
+  // A share is a folder on one of the HP's drives. The Files tab starts at the drives (C:, D:, the external
+  // disk), each with its real used and free space; opening one lists the shared folders on it, each with
+  // what's in it; opening one of those browses it. Nothing outside the shares is shown.
+  const driveOf = s => { const m = /^([A-Za-z]):/.exec(s.rootPath || ''); return m ? m[1].toUpperCase() + ':' : /^\\\\/.test(s.rootPath || '') ? 'Network' : 'Other'; };
+  const drivesHash = drive => '#/files' + (drive ? '?drive=' + encodeURIComponent(drive) : '');
+  async function renderDrives(ctx, drive) {
     const { main, shell } = ctx;
-    shell.setLocation('<span class="title">Files</span>');
     shell.setSearch(null);
-    main.innerHTML = `<div class="page"><div class="page-head"><h1>Shares</h1></div><div id="body"></div></div>`;
+    main.innerHTML = `<div class="page"><div class="page-head">${drive ? `<button class="btn btn-ghost btn-sm back-btn" id="fback">${U.icon('chevronLeft')}<span>This PC</span></button>` : ''}
+      <h1>${drive ? U.esc(drive) : 'This PC'}</h1><span class="muted" id="dcount"></span></div><div id="body"></div></div>`;
+    shell.setLocation(drive ? `<div class="crumbs"><button class="crumb" data-drives>This PC</button><span class="crumb-sep">${U.icon('chevronRight')}</span><button class="crumb current" aria-current="page">${U.esc(drive)}</button></div>` : '<span class="title">This PC</span>');
+    document.querySelectorAll('[data-drives]').forEach(b => b.onclick = () => ctx.go(drivesHash()));
+    if (drive) main.querySelector('#fback').onclick = () => ctx.go(drivesHash());
     const body = main.querySelector('#body');
     let list;
     try { list = await ui.load(body, api.listShares(), `<div class="share-grid">${'<div class="card skel" style="height:150px"></div>'.repeat(3)}</div>`); }
-    catch (e) { body.innerHTML = ui.errorState(e); body.querySelector('#retry').onclick = () => renderShares(ctx); return; }
+    catch (e) { body.innerHTML = ui.errorState(e); body.querySelector('#retry').onclick = () => renderDrives(ctx, drive); return; }
     if (!list.length) {
-      body.innerHTML = ui.empty({ icon: 'database', title: 'No shares yet', text: 'Shares are the drives Attic serves. The master account adds them in Settings.',
+      body.innerHTML = ui.empty({ icon: 'database', title: 'No shared folders yet', text: 'Shared folders are the folders on the HP’s drives that Attic serves. The master account adds them in Settings.',
         action: ctx.state.session.type === 'master' ? '<a class="btn btn-primary" href="#/settings">Open Settings</a>' : '' });
       return;
     }
-    body.innerHTML = `<div class="share-grid">${list.map(s => {
-      if (s.total == null) {
-        return `<button class="card share-card${s.available ? '' : ' unavailable'}" data-id="${s.id}" aria-label="${U.esc(s.name)}${s.available ? '' : ', unavailable'}">
+    const drives = new Map();
+    for (const s of list) { const d = driveOf(s); if (!drives.has(d)) drives.set(d, []); drives.get(d).push(s); }
+    if (!drive) {
+      main.querySelector('#dcount').textContent = `${drives.size} drive${drives.size === 1 ? '' : 's'}`;
+      body.innerHTML = `<div class="share-grid">${[...drives].map(([d, shares]) => {
+        const s = shares.find(x => x.total != null) || shares[0], up = shares.some(x => x.available);
+        const count = shares.reduce((n, x) => n + (x.count || 0), 0);
+        const label = s.deviceType === 'external' ? 'External drive' : d === 'Network' ? 'Network location' : s.deviceType === 'ssd' ? 'SSD' : 'Local disk';
+        const p = s.total != null ? U.pct(s.used, s.total) : null;
+        return `<button class="card share-card drive-card${up ? '' : ' unavailable'}" data-drive="${U.esc(d)}" aria-label="${U.esc(d)} ${label}${up ? '' : ', unavailable'}">
           <div class="top"><div class="icon-tile">${U.shareIcon(s.deviceType)}</div>
-            <div style="min-width:0;flex:1"><div class="nm">${U.esc(s.name)}</div><div class="path mono">${U.esc(s.rootPath)}</div></div>
-            ${s.available ? '' : `<span class="tag">${U.icon('cloudOff')}Unavailable</span>`}</div>
-          <div class="meter-row"><span><b class="mono" style="color:var(--ink)">${U.formatBytes(s.used)}</b> in files you can see</span></div>
-          <div class="meter-row"><span>${U.formatCount(s.count)} files, yours and shared</span><span>${s.available ? '' : 'Last seen ' + U.relDate(s.lastSeenAt)}</span></div>
+            <div style="min-width:0;flex:1"><div class="nm">${U.esc(label)} (${U.esc(d)})</div><div class="path">${shares.length} shared folder${shares.length === 1 ? '' : 's'} · ${U.formatCount(count)} files</div></div>
+            ${up ? '' : `<span class="tag">${U.icon('cloudOff')}Unavailable</span>`}</div>
+          ${p != null ? `<div class="meter${up ? meterClass(p) : ''}"><span style="width:${p.toFixed(1)}%"></span></div>
+          <div class="meter-row"><span><span class="mono">${U.formatBytes(s.free)}</span> free of <span class="mono">${U.formatBytes(s.total)}</span></span><span>${U.formatPct(p)} full</span></div>` : ''}
         </button>`;
-      }
-      const p = U.pct(s.used, s.total);
-      return `<button class="card share-card${s.available ? '' : ' unavailable'}" data-id="${s.id}" aria-label="${U.esc(s.name)}${s.available ? '' : ', unavailable'}">
-        <div class="top"><div class="icon-tile">${U.shareIcon(s.deviceType)}</div>
-          <div style="min-width:0;flex:1"><div class="nm">${U.esc(s.name)}</div><div class="path mono">${U.esc(s.rootPath)}</div></div>
-          ${s.available ? '' : `<span class="tag">${U.icon('cloudOff')}Unavailable</span>`}</div>
-        <div class="meter${s.available ? meterClass(p) : ''}"><span style="width:${p.toFixed(1)}%"></span></div>
-        <div class="meter-row"><span><b class="mono" style="color:var(--ink)">${U.formatBytes(s.used)}</b> used</span><span><span class="mono">${U.formatBytes(s.free)}</span> free</span></div>
-        <div class="meter-row"><span>${U.formatCount(s.count)} files</span><span>${s.available ? U.formatPct(p) + ' full' : 'Last seen ' + U.relDate(s.lastSeenAt)}</span></div>
-      </button>`;
-    }).join('')}</div>`;
-    body.querySelectorAll('.share-card').forEach(c => c.onclick = () => ctx.go(folderHash(c.dataset.id, '')));
+      }).join('')}</div>`;
+      body.querySelectorAll('[data-drive]').forEach(c => c.onclick = () => ctx.go(drivesHash(c.dataset.drive)));
+      return;
+    }
+    const shares = drives.get(drive) || [];
+    if (!shares.length) return ctx.go(drivesHash());
+    main.querySelector('#dcount').textContent = `${shares.length} shared folder${shares.length === 1 ? '' : 's'}`;
+    // The shared folders on this drive, listed like folders: name, where it is, and what's in it.
+    body.innerHTML = `<div class="folder-list" role="list">${shares.map(s => `<button class="row share-row-btn${s.available ? '' : ' unavailable'}" role="listitem" data-id="${s.id}">
+        <span class="icon">${U.icon('folder')}</span>
+        <span class="nm">${U.esc(s.name)}<span class="sub">${U.esc(s.rootPath)}</span></span>
+        <span class="c">${s.available ? `${U.formatCount(s.count || 0)} files` : 'Unavailable'}</span>
+        <span class="c mono">${s.available && s.count ? U.formatBytes(s.fileBytes || 0) : ''}</span></button>`).join('')}</div>`;
+    body.querySelectorAll('[data-id]').forEach(c => c.onclick = () => ctx.go(folderHash(c.dataset.id, '')));
   }
 
   // ---------- folder ----------
@@ -124,6 +144,7 @@
     ts.owner = ts.owner || '';
     main.innerHTML = `<div class="page" id="fpage"><div class="page-head">
         <div class="only-sm crumbs-sm" id="crumbs-sm" style="width:100%"></div>
+        <button class="btn btn-ghost btn-sm back-btn" id="fback" aria-label="Back">${U.icon('chevronLeft')}<span id="fback-label">Back</span></button>
         <h1 id="ftitle"></h1><span class="muted" id="fcount"></span><span class="grow"></span>
         <div class="toolbar">
           <button class="btn btn-secondary btn-sm" id="fupload">${U.icon('upload')}<span>Upload</span></button><input type="file" id="fpick" multiple hidden>
@@ -175,6 +196,10 @@
     csm.innerHTML = crumbs;
     wireCrumbs(csm, share, path, ctx.go);
     main.querySelector('#ftitle').textContent = path ? path.split('/').pop() : share.name;
+    // Back: up one folder; from a shared folder's top, back to its drive.
+    const up = path ? path.split('/').slice(0, -1).join('/') : null;
+    main.querySelector('#fback-label').textContent = up === null ? driveOf(share) : up ? up.split('/').pop() : share.name;
+    main.querySelector('#fback').onclick = () => ctx.go(up === null ? drivesHash(driveOf(share)) : folderHash(shareId, up));
 
     // Upload into this folder. The uploader owns what it uploads; progress shows on the button.
     const upBtn = main.querySelector('#fupload'), pick = main.querySelector('#fpick');
@@ -191,11 +216,13 @@
       upBtn.disabled = true;
       // 4-2: big files go in pieces and carry on after a drop; meanwhile the button says it's waiting.
       const paused = new Set();
-      const results = await Promise.allSettled(good.map(f => api.upload(shareId, path, f, (p, st) => {
+      // Three at a time (feedback 1): a batch of photos from a phone shares the Wi-Fi better, and Safari copes.
+      const pool = (list, n, fn) => { const out = new Array(list.length); let next = 0; const worker = async () => { while (next < list.length) { const i = next++; try { out[i] = { status: 'fulfilled', value: await fn(list[i]) }; } catch (reason) { out[i] = { status: 'rejected', reason }; } } }; return Promise.all(Array.from({ length: Math.min(n, list.length) }, worker)).then(() => out); };
+      const results = await pool(good, 3, f => api.upload(shareId, path, f, (p, st) => {
         done.set(f, p * f.size);
         if (st && st.paused) paused.add(f); else paused.delete(f);
         label.textContent = paused.size ? 'Waiting…' : Math.floor([...done.values()].reduce((a, b) => a + b, 0) / total * 100) + '%';
-      }).promise));
+      }).promise);
       upBtn.disabled = false;
       label.textContent = 'Upload';
       const ok = results.filter(r => r.status === 'fulfilled').length;
@@ -350,6 +377,8 @@
       pc.querySelector('#veil').onclick = close;
       const file = selected;
       pc.querySelector('#send-dev').onclick = () => root.Attic.send.open({ file });
+      const playBtn = pc.querySelector('#play'); // feedback 1: play a video from its folder
+      if (playBtn) playBtn.onclick = () => root.Attic.media.play(ctx, file, [share]);
       pc._close = close;
     }
 
@@ -377,7 +406,7 @@
   async function render(ctx) {
     const [shareId, ...rest] = ctx.route.segs.slice(1);
     ctx.state.tabs.files.lastHash = location.hash || '#/files';
-    if (!shareId) return renderShares(ctx);
+    if (!shareId) return renderDrives(ctx, ctx.route.query.drive || '');
     return renderFolder(ctx, shareId, rest.join('/'), ctx.route.query.select);
   }
 

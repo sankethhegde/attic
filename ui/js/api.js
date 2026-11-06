@@ -187,9 +187,9 @@
   // the background doesn't lose it. After a failure it waits (longer each time, or until the connection
   // or the page is back), asks the HP where it got to, and carries on from there. Meanwhile the screen
   // is kept on where the browser allows it (Screen Wake Lock). `resumable.over`: files bigger than this
-  // go in pieces; smaller ones in one request, as before. `resumable.chunk`: null means the HP's
+  // go in pieces; smaller ones in one request, as before. `resumable.chunk`: 32 MB (feedback 1: four times fewer round trips than the HP's 8 MB suggestion, which matters on Wi-Fi; a cut-off piece loses nothing, the HP keeps its bytes); null means the HP's
   // suggestion (8 MB). Both can be changed by tests.
-  const resumable = { over: 16 * 1024 * 1024, chunk: null, maxTries: 40 };
+  const resumable = { over: 16 * 1024 * 1024, chunk: 32 * 1024 * 1024, maxTries: 40 };
   const RETRYABLE = new Set(['UNREACHABLE', 'OFFSET', 'BUSY', 'CANCELLED_PIECE', 'SERVER_BUSY']);
   let wake = null, wakeUsers = 0;
   async function keepAwake(on) {
@@ -479,7 +479,7 @@
       if (ix) {
         const per = {};
         for (const e of ix.entries) { const p = per[e.share] || (per[e.share] = { count: 0, bytes: 0 }); p.count++; p.bytes += e.size; }
-        list.forEach(s => { const p = per[s.id] || { count: 0, bytes: 0 }; s.count = p.count; if (s.total == null) s.used = p.bytes; });
+        list.forEach(s => { const p = per[s.id] || { count: 0, bytes: 0 }; s.count = p.count; s.fileBytes = p.bytes; if (s.total == null) s.used = p.bytes; });
       }
       return list;
     },

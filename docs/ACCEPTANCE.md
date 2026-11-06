@@ -371,6 +371,28 @@ Tests: `phone-test.mjs` 17/17. Also `node --test "agent/*.test.js"` 52/52, `node
 
 For the final pass on the real iPhone: upload a real 4K video from the camera roll, and lock the screen part-way. Also check whether Safari's picker sends the original, or a smaller or converted copy (HEIC to JPEG, a compressed video). If it converts, note which picker setting keeps the original, for the user guide.
 
+## Feedback round 1: the interface's half (6 Nov 2026)
+
+Your feedback list after trying 0.11.0. These are the interface changes. Checked in `phone-test.mjs` (emulated iPhone, over HTTPS, with a real H.264 clip from `desktop/scripts/fixtures/clip.mp4`) and every desktop suite.
+
+| Feedback | Result | How it was verified |
+| --- | --- | --- |
+| Photos and Videos: All or By folder | ✅ | By folder shows a tile per folder (cover, count, where it is); opening one shows only its photos, with "All folders" to go back; All shows everything again |
+| A way back from a folder | ✅ | Every folder has Back (up one level: from 2026 to Photos; from a shared folder's top to its drive), and the breadcrumb starts at the drive |
+| Files like File Explorer | ✅ | Files opens on This PC: one card per drive ("Local disk (C:)"), with that drive's real free and total space. Opening it lists the shared folders on it, then their folders. Nothing outside the shared folders is shown (your choice) |
+| An interactive Dashboard | ✅ | Each share row opens it in Files, the storage bar's file types open that type, "N files on M shares" opens Files (the devices and Storage by type already did) |
+| Play beside Download for videos in Files | ✅ | A video's details: Play · Download · Send to device; Play starts it |
+| Fewer clicks to play in Videos | ✅ | One tap on a video plays it (was two) |
+| Video thumbnails | ✅ | Each card shows the video's own frame at 1 s, loaded only for cards on screen. A file the browser can't decode stays dark with its play button |
+| Time left when sending | ✅ | The Send dialog shows speed and "about N min left" (sending to the Ally: "994 KB/s · less than a minute left"); Transfers shows it too |
+| Usernames like Sankethhegde4321@gmail.com | ✅ in the interface | The setup and Add device forms accept an email address; the field says "Username or email" and the iPhone no longer capitalises it. **The HP must accept it too** (its usernames are still 3–32 letters, numbers, dots, dashes or underscores) |
+| Faster uploads | ✅ in part | Pieces of 32 MB instead of 8 MB (four times fewer round trips on Wi-Fi), and Files uploads three at a time instead of all at once. **The bigger change is the HP's:** today a send reaches the HP completely before the other device starts collecting it |
+| Forgot password (email), sign up with master approval | ⏳ waits for the HP | Both need the HP first (sending email through a Gmail app password; accounts that wait for approval). Their screens follow once the HP's side is on main |
+
+Tests: `phone-test.mjs` 25/25. Also `node --test "agent/*.test.js"` 52/52, `smoke-test.mjs` (0 console errors), `tray-test.mjs` 19/19, `mode-test.mjs` 14/14, `discovery-test.mjs` 13/13, `pairing-test.mjs` 19/19, `live-stats-test.mjs` 17/17, `send-test.mjs` 19/19, `transfers-test.mjs` 17/17, `shortcuts-test.mjs` 12/12, `low-resource-test.mjs` 16/16, `update-test.mjs` 12/12.
+
+Nothing in `desktop/` changed, so 0.11.0 stays installed. The new screens come from the HP once this branch is merged and the HP runs it.
+
 ## Problems found and fixed during the run
 
 1. **Focus after navigation:** after opening a folder or tab, keyboard focus fell back to the top of the page, so you had to Tab through the header again. It now moves into the new content.
