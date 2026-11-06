@@ -134,3 +134,70 @@ test('while a game runs (low-resource mode) the download waits, then goes ahead'
   assert.ok(await until(() => u.state.status === 'ready'));
   hp.srv.close();
 });
+
+// ---------- GitHub releases (0.12.1): the newest published release first, the HP as the fallback ----------
+// A stand-in for GitHub: the API, latest.yml, and the installer, whose download redirects to another host
+// (as GitHub's does), so the device token meant for the HP must not follow it.
+function standInGitHub(bytes, version, { published = true } = {}) {
+  const fileName = `Attic-Hub-Setup-${version}.exe`, sha512 = crypto.createHash('sha512').update(bytes).digest('base64');
+  const seen = { tokens: [], ranges: [] };
+  const srv = http.createServer((req, res) => {
+    const port = srv.address().port;
+    if (req.url === '/repos/sankethhegde/attic/releases/latest') {
+      if (!published) { res.writeHead(404); return res.end('{"message":"Not Found"}'); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ tag_name: 'v' + version, body: 'From GitHub', published_at: '2026-11-06T10:00:00Z', assets: [
+        { name: fileName, size: bytes.length, browser_download_url: `http://127.0.0.1:${port}/download/${fileName}` },
+        { name: 'latest.yml', size: 100, browser_download_url: `http://127.0.0.1:${port}/download/latest.yml` }] }));
+    }
+    if (req.url === '/download/latest.yml') { res.writeHead(200); return res.end(`version: ${version}\nfiles:\n  - url: ${fileName}\n    sha512: ${sha512}\n    size: ${bytes.length}\npath: ${fileName}\nsha512: ${sha512}\n`); }
+    if (req.url === `/download/${fileName}`) { res.writeHead(302, { Location: `http://localhost:${port}/cdn/${fileName}` }); return res.end(); }
+    if (req.url === `/cdn/${fileName}`) {
+      seen.tokens.push(req.headers['x-attic-device'] || null);
+      const m = /bytes=(\d+)-/.exec(req.headers.range || ''), from = m ? +m[1] : 0;
+      seen.ranges.push(from);
+      res.writeHead(m ? 206 : 200, { 'Content-Length': bytes.length - from });
+      return res.end(bytes.subarray(from));
+    }
+    res.writeHead(404); res.end();
+  });
+  return new Promise(r => srv.listen(0, '127.0.0.1', () => r({ srv, seen, api: `http://127.0.0.1:${srv.address().port}` })));
+}
+
+test('GitHub’s newest published release comes first: found, downloaded through the redirect, checked, ready', async () => {
+  const bytes = installer(200e3);
+  const gh = await standInGitHub(bytes, '0.12.1');
+  const hp = await standIn(installer(1000), '0.11.0'); // the HP is behind
+  const dir = tmpDir();
+  const u = createUpdater({ current: '0.12.0', dir, server: () => ({ base: hp.base, headers: { 'X-Attic-Device': 'tok' } }),
+    github: { api: gh.api, owner: 'sankethhegde', repo: 'attic' } });
+  await u.check();
+  assert.ok(await until(() => u.state.status === 'ready'), u.state.status + ' ' + u.state.error);
+  assert.strictEqual(u.state.latest.version, '0.12.1');
+  assert.strictEqual(u.state.latest.notes, 'From GitHub');
+  assert.ok(fs.readFileSync(path.join(dir, 'Attic-Hub-Setup-0.12.1.exe')).equals(bytes));
+  assert.deepStrictEqual(gh.seen.tokens, [null], 'the HP’s device token isn’t sent to GitHub');
+  // The HP announcing its older release over the hub doesn't undo it.
+  await u.offer(hp.release);
+  assert.strictEqual(u.state.status, 'ready');
+  assert.strictEqual(u.state.latest.version, '0.12.1');
+  gh.srv.close(); hp.srv.close();
+});
+
+test('nothing published on GitHub, or no internet: the HP is asked instead', async () => {
+  const gh = await standInGitHub(installer(10), '0.12.1', { published: false });
+  const hp = await standIn(installer(50e3), '0.12.2');
+  const u = createUpdater({ current: '0.12.0', dir: tmpDir(), server: () => ({ base: hp.base, headers: {} }), github: { api: gh.api, owner: 'sankethhegde', repo: 'attic' } });
+  await u.check();
+  assert.ok(await until(() => u.state.status === 'ready'), u.state.status + ' ' + u.state.error);
+  assert.strictEqual(u.state.latest.version, '0.12.2');
+  gh.srv.close();
+  const offline = createUpdater({ current: '0.12.0', dir: tmpDir(), server: () => ({ base: hp.base, headers: {} }), github: { api: 'http://127.0.0.1:9', owner: 'sankethhegde', repo: 'attic' } });
+  await offline.check();
+  assert.ok(await until(() => offline.state.status === 'ready'), offline.state.status + ' ' + offline.state.error);
+  // Neither reachable: an error that says so.
+  const none = createUpdater({ current: '0.12.0', dir: tmpDir(), server: () => null, github: { api: 'http://127.0.0.1:9', owner: 'sankethhegde', repo: 'attic' } });
+  const s = await none.check();
+  assert.strictEqual(s.status, 'error');
+  hp.srv.close();
+});
