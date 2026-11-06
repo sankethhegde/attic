@@ -255,7 +255,7 @@ try {
   const d = dash ? JSON.parse(dash) : {};
   check('a phone isn’t offered what it can’t do: no Choose a folder, no Drag files here, no Publish an update', sendBtns.files && !sendBtns.folder && !d.drag && d.browse === 'Choose photos or files' && publish === 'false',
     `${JSON.stringify(sendBtns)} ${dash} publish visible ${publish}`);
-  const toast = await ev(`Attic.ui.toast('A toast'); await new Promise(r => setTimeout(r, 900)); /* after its 0.2 s rise */ const t = document.querySelector('.toast').getBoundingClientRect(), b = document.querySelector('.tabs').getBoundingClientRect(); return { toast: Math.round(t.bottom), tabs: Math.round(b.top) }`);
+  const toast = await ev(`Attic.ui.toast('A toast'); await new Promise(r => setTimeout(r, 900)); /* after its 0.2 s rise */ const t = document.querySelector('.toasts').getBoundingClientRect() /* the stack, not a toast mid-rise */, b = document.querySelector('.tabs').getBoundingClientRect(); return { toast: Math.round(t.bottom), tabs: Math.round(b.top) }`);
   check('toasts sit above the tab bar', toast.toast <= toast.tabs, JSON.stringify(toast));
 
   // 5. 4-2: a big "video" from the camera roll, uploaded and sent in pieces over a slow Wi-Fi that drops.
@@ -360,7 +360,7 @@ try {
   await look('videos-390');
   await ev(`[...document.querySelectorAll('.vcard')].find(c => /Beach/.test(c.textContent)).id = 'beach-card'; return 1`);
   await tap('#beach-card');
-  const playing = await waitFor(`(() => { const v = document.querySelector('.dialog video'); return v && !v.paused && v.currentTime > 0 && 'playing'; })()`, 8000);
+  const playing = await waitFor(`(() => { const v = document.querySelector('.dialog video'); return v && v.currentTime > 0 && (!v.paused || v.ended) && 'playing'; })()`, 8000); /* the 3 s clip may already have ended */
   await closeDialog();
   await ev(`document.querySelectorAll('video').forEach(v => v.pause()); return 1`);
   check('Videos: each shows a frame from the video, and one tap plays it', thumbs === 2 && playing === 'playing', `thumbnails decoded: ${thumbs}; after one tap: ${playing}`);

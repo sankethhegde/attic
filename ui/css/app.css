@@ -101,6 +101,9 @@ h1, h2, h3 { margin: 0; }
 #app { min-height: 100%; }
 
 /* ---------- buttons ---------- */
+/* Anything marked hidden stays hidden, even a button (.btn sets display, which would otherwise win over the
+   browser's own [hidden] rule: Restart to update showed with nothing to install). */
+[hidden] { display: none !important; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   height: 40px; padding: 0 16px; border-radius: var(--r-md); border: 1.5px solid transparent;
