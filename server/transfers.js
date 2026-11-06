@@ -15,6 +15,8 @@
 // the leg ends. Core Node only.
 'use strict';
 const crypto = require('crypto'), fs = require('fs'), path = require('path');
+const { EventEmitter } = require('events');
+const { Readable } = require('stream');
 const { AuthError } = require('./auth');
 const { segmentOk } = require('./safe-path');
 
@@ -46,7 +48,7 @@ const COLS = { id: 'id', fileName: 'file_name', size: 'size', from: 'from_id', f
   startedAt: 'started_at', uploadedAt: 'uploaded_at', deliveryStartedAt: 'delivery_started_at', finishedAt: 'finished_at', error: 'error', attempts: 'attempts' };
 const fromRow = r => { if (!r) return null; const t = {}; for (const [k, c] of Object.entries(COLS)) t[k] = r[c] === undefined ? null : r[c]; return t; };
 
-function createTransfers({ db, dataDir, spoolDir, log = () => {}, onChange = () => {}, onProgress = () => {} }) {
+function createTransfers({ db, dataDir, spoolDir, log = () => {}, onChange = () => {}, onProgress = () => {}, onRelay = () => {} }) {
   fs.mkdirSync(spoolDir, { recursive: true });
   const fileOf = id => path.join(spoolDir, id + '.bin');
   const partOf = id => path.join(spoolDir, id + '.part');
@@ -101,12 +103,15 @@ function createTransfers({ db, dataDir, spoolDir, log = () => {}, onChange = () 
   }
 
   // ---------- live progress (2-5) ----------
-  // id -> { stage, bytes, speed, at, lastBytes, lastAt }. Speed is bytes per second, smoothed.
+  // "id|stage" -> { stage, bytes, speed, at, lastBytes, lastAt }. Speed is bytes per second, smoothed.
+  // Per leg, because with a relay (round 1) the upload and the delivery move at the same time.
   const live = new Map();
+  const liveOf = (id, stage) => live.get(id + '|' + stage);
+  const dropLive = id => { live.delete(id + '|upload'); live.delete(id + '|deliver'); relayedAll.delete(id); };
   function tick(id, stage, bytes, force) {
     const t0 = Date.now();
-    let p = live.get(id);
-    if (!p || p.stage !== stage) { p = { stage, bytes, speed: null, at: 0, lastBytes: bytes, lastAt: t0 }; live.set(id, p); }
+    let p = liveOf(id, stage);
+    if (!p) { p = { stage, bytes, speed: null, at: 0, lastBytes: bytes, lastAt: t0 }; live.set(id + '|' + stage, p); }
     p.bytes = bytes;
     if (!force && t0 - p.at < PROGRESS_MS) return;
     const dt = (t0 - p.lastAt) / 1000;
@@ -120,11 +125,67 @@ function createTransfers({ db, dataDir, spoolDir, log = () => {}, onChange = () 
     if (t) onProgress(t, { stage, bytesDone: bytes, speed: p.speed });
   }
   const withLive = t => {
-    const p = t && t.status === 'active' && live.get(t.id);
-    return p && p.stage === t.stage ? Object.assign({}, t, { bytesDone: p.bytes, speed: p.speed }) : t;
+    const p = t && t.status === 'active' && liveOf(t.id, t.stage);
+    return p ? Object.assign({}, t, { bytesDone: p.bytes, speed: p.speed }) : t;
   };
 
   const inFlight = new Map(); // id -> stop(error), for uploads arriving now
+
+  // ---------- relaying a send while it arrives (feedback round 1) ----------
+  // A send used to reach the HP whole before the receiving device started, so it took both legs end to
+  // end. Now the receiving agent is told as soon as the upload starts (onRelay), and its download is
+  // fed the bytes as they land, waiting when it catches up. If the upload fails or is cancelled, the
+  // download is cut off (and the agent's retry finds the transfer gone).
+  const growth = new EventEmitter(); growth.setMaxListeners(0); // 'grow' (id): more bytes on disk
+  const readers = new Map();                                     // id -> downloads following it now
+  const relayedAll = new Set();                                  // ids a download has followed to the last byte
+  const uploadingPath = id => inFlight.has(id) ? partOf(id) : fs.existsSync(chunkedOf(id)) ? chunkedOf(id) : null;
+  function follow(id, handle, start, end) {
+    let pos = start, waiting = null, busy = false;
+    const wake = () => { if (waiting) { const w = waiting; waiting = null; w(); } };
+    const onGrow = g => { if (g === id) wake(); };
+    growth.on('grow', onGrow);
+    const timer = setInterval(wake, 250);
+    readers.set(id, (readers.get(id) || 0) + 1);
+    const s = new Readable({
+      highWaterMark: 1 << 20,
+      read() { pump().catch(e => s.destroy(e)); },
+      destroy(err, cb) {
+        growth.off('grow', onGrow); clearInterval(timer); wake();
+        readers.set(id, (readers.get(id) || 1) - 1);
+        handle.close().catch(() => {});
+        cb(err);
+      }
+    });
+    async function pump() {
+      if (busy) return;
+      busy = true;
+      try {
+        for (;;) {
+          if (s.destroyed) return;
+          if (pos > end) { if (end + 1 >= (find(id) || {}).size) relayedAll.add(id); s.push(null); return; }
+          const avail = Math.min((await handle.stat()).size, end + 1) - pos;
+          if (avail > 0) {
+            const buf = Buffer.allocUnsafe(Math.min(avail, 1 << 20));
+            const { bytesRead } = await handle.read(buf, 0, buf.length, pos);
+            pos += bytesRead;
+            if (!s.push(buf.subarray(0, bytesRead))) return; // the next read() carries on
+            continue;
+          }
+          const t = find(id);
+          if (!t || !OPEN.includes(t.status)) throw new Error('The transfer stopped.');
+          await new Promise(r => { waiting = r; });
+        }
+      } finally { busy = false; }
+    }
+    return s;
+  }
+  // When an upload completes: if a download is following it (or already read it all, a moment ahead of
+  // the upload's own ending), the transfer is mid-delivery; if not (nobody started, or the agent gave
+  // up), it's queued, and the agent is told as usual.
+  const afterUpload = (id, cur, ms) => ((readers.get(id) || 0) > 0 || relayedAll.delete(id)) && cur.deliveryStartedAt
+    ? { status: 'active', stage: 'deliver', bytesDone: 0, uploadedAt: now(), uploadSpeed: Math.round(cur.size / ms * 1000) }
+    : { status: 'queued', stage: 'waiting', bytesDone: 0, uploadedAt: now(), uploadSpeed: Math.round(cur.size / ms * 1000), deliveryStartedAt: null };
 
   return {
     MAX_SIZE,
@@ -167,10 +228,12 @@ function createTransfers({ db, dataDir, spoolDir, log = () => {}, onChange = () 
           const fail = e => { if (!failure) { failure = e; stream.unpipe(out); out.destroy(); } };
           inFlight.set(id, fail);
           out = fs.createWriteStream(partOf(id), { flags: 'wx' });
+          out.once('open', () => onRelay(find(id)));
+          out.on('drain', () => growth.emit('grow', id));
           stream.on('data', c => {
             bytes += c.length;
             if (bytes > t.size) fail(new AuthError(400, 'INVALID', 'More data than the size given.'));
-            else tick(id, 'upload', bytes);
+            else { tick(id, 'upload', bytes); growth.emit('grow', id); }
           });
           stream.on('close', () => { if (stream.complete === false) fail(new AuthError(400, 'CANCELLED', 'The upload was cut off.')); });
           stream.on('error', () => fail(new AuthError(400, 'CANCELLED', 'The upload was cut off.')));
@@ -182,17 +245,20 @@ function createTransfers({ db, dataDir, spoolDir, log = () => {}, onChange = () 
         await fs.promises.rename(partOf(id), fileOf(id));
       } catch (e) {
         removeFile(id);
-        live.delete(id);
+        dropLive(id);
         const cur = find(id);
         if (cur && cur.status === 'active') update(id, { status: 'failed', bytesDone: bytes, finishedAt: now(), error: e instanceof AuthError ? e.message : 'The HP couldn’t store the file.' });
+        growth.emit('grow', id); // a relay following it stops
         throw e instanceof AuthError ? e : new AuthError(500, 'SERVER', 'The HP couldn’t store the file.');
       } finally { inFlight.delete(id); }
-      live.delete(id);
+      live.delete(id + '|upload');
       const cur = find(id);
       if (!cur || cur.status !== 'active') { removeFile(id); throw new AuthError(409, 'CANCELLED', 'The transfer was cancelled.'); }
       const ms = Math.max(1, Date.now() - started);
       log(`Transfer ${id}: ${cur.fileName} (${cur.size} bytes) is on the HP, for ${cur.toName || cur.to}`);
-      return update(id, { status: 'queued', stage: 'waiting', bytesDone: 0, uploadedAt: now(), uploadSpeed: Math.round(cur.size / ms * 1000) });
+      const done = update(id, afterUpload(id, cur, ms));
+      growth.emit('grow', id);
+      return done;
     },
 
     // ---------- resumable uploads (4-2, uploads.js) ----------
@@ -203,26 +269,30 @@ function createTransfers({ db, dataDir, spoolDir, log = () => {}, onChange = () 
       if (!t || t.userId !== userId || t.from !== (from || null)) throw NOT_FOUND();
       if (t.status !== 'active' || t.stage !== 'upload' || inFlight.has(id)) throw new AuthError(409, 'INVALID', 'This transfer isn’t waiting for its file.');
       if (fs.existsSync(chunkedOf(id))) throw new AuthError(409, 'BUSY', 'This transfer already has a resumable upload. Ask it where it got to (GET /api/uploads).');
+      setImmediate(() => onRelay(find(id))); // once uploads.js has made the file
       return { path: chunkedOf(id), size: t.size, name: t.fileName };
     },
-    progress(id, bytes) { tick(id, 'upload', bytes); },
+    progress(id, bytes) { tick(id, 'upload', bytes); growth.emit('grow', id); },
     // The last piece arrived: the file is on the HP, as after a one-request upload.
     async finishChunked(id, bytes) {
       const cur = find(id);
       if (!cur || cur.status !== 'active' || cur.stage !== 'upload') { removeFile(id); throw new AuthError(409, 'CANCELLED', 'The transfer was cancelled.'); }
       if (bytes !== cur.size) throw new AuthError(400, 'INVALID', 'The file isn’t complete.');
       await fs.promises.rename(chunkedOf(id), fileOf(id));
-      live.delete(id);
+      live.delete(id + '|upload');
       const ms = Math.max(1, Date.now() - Date.parse(cur.startedAt));
       log(`Transfer ${id}: ${cur.fileName} (${cur.size} bytes) is on the HP, for ${cur.toName || cur.to}`);
-      return update(id, { status: 'queued', stage: 'waiting', bytesDone: 0, uploadedAt: now(), uploadSpeed: Math.round(cur.size / ms * 1000) });
+      const done = update(id, afterUpload(id, cur, ms));
+      growth.emit('grow', id);
+      return done;
     },
     // A resumable upload was abandoned (dropped after a day idle): the transfer fails, for Retry.
     failChunked(id, reason) {
       const t = find(id);
       fs.promises.unlink(chunkedOf(id)).catch(() => {});
-      live.delete(id);
+      dropLive(id);
       if (t && t.status === 'active' && t.stage === 'upload') update(id, { status: 'failed', finishedAt: now(), error: reason });
+      growth.emit('grow', id);
     },
 
     // The sender or the master. The HP's copy is deleted; a receiving agent is told by onChange.
@@ -230,12 +300,13 @@ function createTransfers({ db, dataDir, spoolDir, log = () => {}, onChange = () 
       const t = find(id);
       if (!t || (!master && t.userId !== userId)) throw NOT_FOUND();
       if (!OPEN.includes(t.status)) throw new AuthError(409, 'INVALID', 'Only an unfinished transfer can be cancelled.');
-      const p = live.get(id);
+      const p = liveOf(id, t.stage);
       const out = update(id, { status: 'cancelled', finishedAt: now(), error: null, bytesDone: p ? p.bytes : t.bytesDone });
-      live.delete(id);
-      // An upload still arriving stops now; its half-written file goes with it.
+      dropLive(id);
+      // An upload still arriving stops now; its half-written file goes with it, and so does a relay.
       if (inFlight.has(id)) inFlight.get(id)(new AuthError(409, 'CANCELLED', 'The transfer was cancelled.'));
       removeFile(id);
+      growth.emit('grow', id);
       return out;
     },
 
@@ -254,44 +325,68 @@ function createTransfers({ db, dataDir, spoolDir, log = () => {}, onChange = () 
     },
 
     // ---------- the receiving device ----------
-    pendingFor: deviceId => q.openFor.all(deviceId).map(fromRow).map(withLive),
+    // What's waiting for it, and (round 1) what's arriving for it right now, so it can start relaying.
+    pendingFor: deviceId => q.openFor.all(deviceId).map(fromRow)
+      .concat(db.prepare("SELECT * FROM transfers WHERE to_id = ? AND status = 'active' AND stage = 'upload' ORDER BY started_at").all(deviceId).map(fromRow).filter(t => uploadingPath(t.id)))
+      .map(withLive),
 
     // The file, for the device it's addressed to. The first request starts the delivery leg; a later
     // one (a resumed download) carries on with it. track(start) counts what each request sends.
+    // While the file is still arriving (round 1), the download follows it as it grows.
     async openForDelivery(id, deviceId) {
       const t = find(id);
-      if (!t || t.to !== deviceId || !PENDING(t)) throw NOT_FOUND();
+      const relay = !!t && t.to === deviceId && t.status === 'active' && t.stage === 'upload';
+      if (!t || t.to !== deviceId || (!PENDING(t) && !relay)) throw NOT_FOUND();
+      const track = start => {
+        let sent = start;
+        return n => { sent += n; tick(id, 'deliver', sent, sent >= t.size); };
+      };
+      if (relay) {
+        let p = uploadingPath(id);
+        for (let i = 0; i < 20 && !p; i++) { await new Promise(r => setTimeout(r, 250)); p = uploadingPath(id); }
+        if (!p) throw new AuthError(503, 'NOT_YET', 'The file hasn’t started arriving at the HP yet. Try again shortly.');
+        let h;
+        try { h = await fs.promises.open(p, 'r'); } catch (e) { throw new AuthError(503, 'NOT_YET', 'The file hasn’t started arriving at the HP yet. Try again shortly.'); }
+        if (!t.deliveryStartedAt) update(id, { deliveryStartedAt: now() });
+        return { handle: h, size: t.size, name: t.fileName, mtime: new Date(t.startedAt), track, createStream: (start, end) => follow(id, h, start, end) };
+      }
       let handle;
       try { handle = await fs.promises.open(fileOf(id), 'r'); }
       catch (e) { update(id, { status: 'failed', finishedAt: now(), error: 'The HP lost its copy of the file. Retry sends it again from the start.' }); throw NOT_FOUND(); }
       const st = await handle.stat();
       if (t.status === 'queued') update(id, { status: 'active', stage: 'deliver', deliveryStartedAt: now() });
-      const track = start => {
-        let sent = start;
-        return n => { sent += n; tick(id, 'deliver', sent, sent >= t.size); };
-      };
       return { handle, size: st.size, name: t.fileName, mtime: new Date(t.uploadedAt || t.startedAt), track };
     },
 
-    // The agent saved it whole: done, and the HP's copy goes.
-    received(id, deviceId) {
-      const t = find(id);
+    // The agent saved it whole: done, and the HP's copy goes. After a relay, the last bytes can reach
+    // the agent a moment before the upload's own ending is recorded, so that is waited for (briefly).
+    async received(id, deviceId) {
+      let t = find(id);
+      for (let i = 0; i < 100 && t && t.to === deviceId && t.status === 'active' && t.stage === 'upload' && t.deliveryStartedAt; i++) {
+        await new Promise(r => setTimeout(r, 100));
+        t = find(id);
+      }
       if (!t || t.to !== deviceId || !PENDING(t)) throw NOT_FOUND();
       removeFile(id);
-      live.delete(id);
+      dropLive(id);
       const ms = Math.max(1, Date.now() - Date.parse(t.deliveryStartedAt || t.uploadedAt || t.startedAt));
       log(`Transfer ${id}: delivered to ${t.toName || deviceId}`);
       return update(id, { status: 'done', stage: null, bytesDone: t.size, finishedAt: now(), speed: Math.round(t.size / ms * 1000) });
     },
 
     // The agent couldn't save it (its disk is full, say). The HP keeps its copy, for Retry, until it expires.
+    // During a relay (round 1) the upload is stopped too: there's no one to give the file to.
     failed(id, deviceId, reason) {
       const t = find(id);
-      if (!t || t.to !== deviceId || !PENDING(t)) throw NOT_FOUND();
+      const relay = !!t && t.to === deviceId && t.status === 'active' && t.stage === 'upload' && !!t.deliveryStartedAt;
+      if (!t || t.to !== deviceId || (!PENDING(t) && !relay)) throw NOT_FOUND();
       const msg = typeof reason === 'string' && reason.trim() ? reason.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 200) : 'The receiving device couldn’t save the file.';
-      const p = live.get(id);
-      live.delete(id);
-      return update(id, { status: 'failed', finishedAt: now(), error: msg, bytesDone: p ? p.bytes : 0 });
+      const p = liveOf(id, 'deliver');
+      dropLive(id);
+      const out = update(id, { status: 'failed', finishedAt: now(), error: msg, bytesDone: p ? p.bytes : 0 });
+      if (relay && inFlight.has(id)) inFlight.get(id)(new AuthError(409, 'RECEIVER_FAILED', `The receiving device couldn’t save the file: ${msg}`));
+      growth.emit('grow', id);
+      return out;
     },
 
     // ---------- lists and history ----------
@@ -325,7 +420,7 @@ function createTransfers({ db, dataDir, spoolDir, log = () => {}, onChange = () 
     dropDevice(deviceId) {
       for (const t of q.openAll.all().map(fromRow).filter(x => x.to === deviceId)) {
         removeFile(t.id);
-        live.delete(t.id);
+        dropLive(t.id);
         update(t.id, { status: 'cancelled', finishedAt: now(), error: 'The receiving device was unpaired.' });
       }
     },

@@ -19,6 +19,8 @@ const { createEvents } = require('./events');
 const { createUpdates, publicRelease } = require('./updates');
 const { createTls } = require('./tls');
 const { createUploads } = require('./uploads');
+const { createMail } = require('./mail');
+const { currentNames } = require('./tls');
 
 const UI_ROOT = path.resolve(__dirname, '..', 'ui');
 // Overridable so the tests can run a server on a throwaway config and data folder.
@@ -77,6 +79,28 @@ const pairing = createPairing(DATA_DIR);
 const tls = CONFIG.https.enabled ? createTls(DATA_DIR, { hostname: SERVER_NAME, extraNames: CONFIG.https.names, log: m => console.log('  ' + m) }) : null;
 let httpsListening = null; // the HTTPS port once it's up
 const tlsSummary = () => tls ? { caFingerprint: tls.caFingerprint, httpsPort: httpsListening } : null;
+
+// ---------- email and simple rate limits (feedback round 1) ----------
+// ATTIC_MAIL_CA lets the tests trust a local stand-in for Gmail; the real thing needs nothing.
+const mail = createMail(DATA_DIR, { tlsOptions: process.env.ATTIC_MAIL_CA ? { ca: fs.readFileSync(process.env.ATTIC_MAIL_CA, 'utf8') } : {} });
+const mailError = e => { throw e instanceof AuthError ? e : new AuthError(502, 'MAIL_ERROR', e.message); };
+const signupLimits = new Map(), forgotLimits = new Map(), forgotPerAccount = new Map();
+function underLimit(map, key, n, windowMs) {
+  const t = Date.now(), list = (map.get(key) || []).filter(x => x > t - windowMs);
+  if (list.length >= n) { map.set(key, list); return false; }
+  map.set(key, list.concat(t));
+  return true;
+}
+function limit(map, key, n, windowMs, message) { if (!underLimit(map, key, n, windowMs)) throw new AuthError(429, 'TOO_MANY_ATTEMPTS', message); }
+// Where a reset link points: the address the request came to, but only if it's one of the HP's own
+// (its names, home addresses, localhost), so a forged Host header can't send the link elsewhere.
+function resetOrigin(req) {
+  const own = new Set(currentNames({ hostname: SERVER_NAME }).concat(CONFIG.https.names.map(n => String(n).toLowerCase())));
+  const m = /^([A-Za-z0-9.-]+|\[[0-9a-fA-F:]+\])(?::(\d{1,5}))?$/.exec(String(req.headers.host || ''));
+  if (m && own.has(m[1].toLowerCase())) return `${isHttps(req) ? 'https' : 'http'}://${m[1]}${m[2] ? ':' + m[2] : ''}`;
+  const ip = currentNames({ hostname: SERVER_NAME }).find(n => /^\d+\.\d+\.\d+\.\d+$/.test(n) && n !== '127.0.0.1') || 'localhost';
+  return `http://${ip}:${CONFIG.port}`;
+}
 // The HP in the device list. It never pairs: requests from this PC itself are the HP.
 const SERVER_DEVICE = { id: 'server', name: SERVER_NAME, kind: DEVICE_KINDS.includes(CONFIG.raw.serverKind) ? CONFIG.raw.serverKind : 'desktop',
   os: os.version(), role: 'server' };
@@ -270,7 +294,9 @@ setInterval(() => events.prune(), 3600e3).unref();
 events.prune();
 
 const transfers = createTransfers({ db, dataDir: DATA_DIR, spoolDir: path.resolve(CONFIG.raw.transferSpool || path.join(DATA_DIR, 'transfers')),
-  log: m => console.log('  ' + m), onChange: t => announceTransfer(t), onProgress: (t, p) => announceProgress(t, p) });
+  log: m => console.log('  ' + m), onChange: t => announceTransfer(t), onProgress: (t, p) => announceProgress(t, p),
+  // Round 1: as soon as a send starts arriving, its receiving agent (if connected) can start fetching it.
+  onRelay: t => { if (t && t.status === 'active' && t.stage === 'upload') hub.toAgent(t.to, { type: 'transfer', transfer: publicTransfer(t) }); } });
 const mayWatch = t => v => v.master || v.accountId === t.userId || v.deviceId === t.to;
 function announceTransfer(t) {
   const pub = publicTransfer(t);
@@ -382,7 +408,8 @@ function sendFile(req, res, f, inline) {
   if (range) headers['Content-Range'] = `bytes ${start}-${end}/${f.size}`;
   res.writeHead(range ? 206 : 200, headers);
   if (req.method === 'HEAD' || f.size === 0) { f.handle.close(); return res.end(); }
-  const stream = f.handle.createReadStream({ start, end, autoClose: true });
+  // A send still arriving (round 1) is read as it grows; anything else straight from the file.
+  const stream = f.createStream ? f.createStream(start, end) : f.handle.createReadStream({ start, end, autoClose: true });
   // A transfer's delivery (2-5) counts what goes out, for its progress.
   if (f.track) { const count = f.track(start); stream.on('data', c => count(c.length)); }
   stream.on('error', () => res.destroy());
@@ -480,6 +507,57 @@ async function handleApi(req, res, url, query) {
       hub.recheck();
       return sendJSON(res, 200, { ok: true }, { 'Set-Cookie': clearCookie });
     }
+  }
+
+  // ---------- sign up, approved by the master (feedback round 1) ----------
+  // From a paired device (the gate above), anyone can ask for an account. It can't sign in until the
+  // master approves it; the master is told by a notification event.
+  if (url === '/api/signup' && m === 'POST') {
+    limit(signupLimits, clientAddr(req), 5, 3600e3, 'Too many sign-ups from this device. Try again later.');
+    if (auth.pendingCount() >= 20) throw new AuthError(429, 'TOO_MANY', 'Too many sign-ups are already waiting for the master. Try again later.');
+    const a = await auth.createDevice(body, { pending: true, signedUpOn: deviceIdOf(req) });
+    events.emit('account.signup', { title: 'New account waiting for approval', body: `${a.displayName} (${a.username}) signed up${req.device ? ' on ' + req.device.name : ''}.`,
+      deviceId: deviceIdOf(req), toAccounts: auth.listAccounts().filter(x => x.type === 'master').map(x => x.id) });
+    return sendJSON(res, 201, { account: a, pending: true, message: 'Your account is waiting for the master’s approval.' });
+  }
+
+  // ---------- forgotten passwords (feedback round 1) ----------
+  // Always the same answer, so it can't be used to find out which accounts or emails exist. If the
+  // account has an email and the HP's mail is set up, a one-time link (30 minutes) goes to that address.
+  if (url === '/api/password/forgot' && m === 'POST') {
+    limit(forgotLimits, clientAddr(req), 5, 15 * 60e3, 'Too many requests. Try again in a few minutes.');
+    const a = auth.byLogin(body.login);
+    if (a && a.status === 'active' && a.email && mail.configured() && underLimit(forgotPerAccount, a.id, 3, 3600e3)) {
+      const { token } = auth.createReset(a.id);
+      const link = `${resetOrigin(req)}/#/reset?token=${encodeURIComponent(token)}`;
+      mail.send({ to: a.email, subject: 'Reset your Attic Hub password', text:
+        `Hello ${a.displayName},\n\nSomeone (hopefully you) asked to reset the password for your Attic Hub account on ${SERVER_NAME}.\n\n` +
+        `Open this link on a device on your home network to choose a new password. It works once, for 30 minutes:\n\n${link}\n\n` +
+        `If you didn’t ask, ignore this email: your password stays as it is.\n` }).catch(e => console.log('  Couldn’t send a reset email: ' + e.message));
+    }
+    return sendJSON(res, 200, { ok: true, mail: mail.configured(),
+      message: mail.configured() ? 'If that account has an email address, a reset link is on its way. It works for 30 minutes.'
+        : 'Email isn’t set up on the HP. Ask the master to reset your password.' });
+  }
+  if (url === '/api/password/reset' && m === 'POST') {
+    const a = await auth.useReset(body.token, body.next, clientAddr(req));
+    hub.recheck();
+    return sendJSON(res, 200, { ok: true, username: a.username, message: 'Password changed. Sign in with the new one.' });
+  }
+
+  // ---------- the HP's email (feedback round 1, master) ----------
+  if (url === '/api/mail') {
+    requireMaster(req);
+    if (m === 'GET') return sendJSON(res, 200, mail.info());
+    if (m === 'PUT') return sendJSON(res, 200, await mail.save({ user: body.user, appPassword: body.appPassword, host: body.host || undefined, port: body.port || undefined }).catch(mailError));
+    if (m === 'DELETE') { mail.forget(); return sendJSON(res, 200, mail.info()); }
+  }
+  if (url === '/api/mail/test' && m === 'POST') {
+    const who = requireMaster(req);
+    const to = body.to || who.account.email;
+    if (!to) throw new AuthError(400, 'INVALID', 'Add an email address to your account, or give one to send the test to.');
+    await mail.send({ to, subject: 'Attic Hub email works', text: `This is a test from the Attic Hub server on ${SERVER_NAME}. Password-reset links will come from this address.\n` }).catch(mailError);
+    return sendJSON(res, 200, { ok: true, to });
   }
 
   // A device sees its share list without drive capacity or free space: those would reveal how much
@@ -689,7 +767,7 @@ async function handleApi(req, res, url, query) {
     }
     // The receiving device downloads it (resumable by range), then confirms or reports a failure.
     if (sub === '/file' && (m === 'GET' || m === 'HEAD')) return sendFile(req, res, await transfers.openForDelivery(id, requireReceiver(req)), false);
-    if (sub === '/received' && m === 'POST') return sendJSON(res, 200, publicTransfer(transfers.received(id, requireReceiver(req))));
+    if (sub === '/received' && m === 'POST') return sendJSON(res, 200, publicTransfer(await transfers.received(id, requireReceiver(req))));
     if (sub === '/failed' && m === 'POST') return sendJSON(res, 200, publicTransfer(transfers.failed(id, requireReceiver(req), body.error)));
     // Retry (2-5): the sender or the master. Back in the queue if the HP still has the file; otherwise
     // the answer is active / upload, and the sender PUTs the file again.
@@ -717,13 +795,30 @@ async function handleApi(req, res, url, query) {
     if (m === 'POST') { requireMaster(req); return sendJSON(res, 201, await auth.createDevice(body)); }
   }
 
-  const acc = /^\/api\/accounts\/([A-Za-z0-9_-]{1,64})(\/password|\/ownership|\/revoke|\/restore|\/remove)?$/.exec(url);
+  const acc = /^\/api\/accounts\/([A-Za-z0-9_-]{1,64})(\/password|\/ownership|\/revoke|\/restore|\/remove|\/approve|\/decline|\/set-password)?$/.exec(url);
   if (acc) {
     const [, id, sub] = acc;
+    // Display name and email (round 1): yourself, or the master for anyone.
     if (!sub && m === 'PATCH') {
       const who = requireSession(req);
       if (who.session.accountId !== id && who.session.type !== 'master') throw FORBIDDEN();
-      return sendJSON(res, 200, auth.updateDisplayName(id, body.displayName));
+      return sendJSON(res, 200, auth.updateProfile(id, { displayName: body.displayName, email: body.email }));
+    }
+    // Round 1, master only: approve or decline a sign-up; set someone's password (they're signed out).
+    if (sub === '/approve' && m === 'POST') {
+      requireMaster(req);
+      const a = auth.approve(id);
+      const raw = auth.listAccounts().find(x => x.id === id);
+      if (raw && raw.signedUpOn) events.emit('account.approved', { title: 'Account approved', body: `${a.displayName}, your Attic Hub account is ready. Sign in as ${a.username}.`, toDevices: [raw.signedUpOn], toAccounts: [id] });
+      return sendJSON(res, 200, a);
+    }
+    if (sub === '/decline' && m === 'POST') { requireMaster(req); return sendJSON(res, 200, { ok: true, account: auth.decline(id) }); }
+    if (sub === '/set-password' && m === 'POST') {
+      const who = requireMaster(req);
+      if (id === who.session.accountId) throw new AuthError(400, 'INVALID', 'Change your own password with your current one, in Settings.');
+      await auth.setPassword(id, body.next);
+      hub.recheck();
+      return sendJSON(res, 200, { ok: true });
     }
     if (sub === '/password' && m === 'POST') {
       const who = requireSession(req);
