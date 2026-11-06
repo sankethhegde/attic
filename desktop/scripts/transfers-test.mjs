@@ -208,7 +208,12 @@ try {
   await send('Page.setInterceptFileChooserDialog', { enabled: false });
 
   // 4. History: filters, search, device and paging.
-  for (let i = 0; i < 52; i++) await allySend(acer.id, `Screenshot ${String(i).padStart(2, '0')}.png`, 1024);
+  // In batches: the HP lets a sender have at most 50 transfers waiting, and since round 1 a send stays open
+  // until the receiving PC has collected it, which may lag a burst.
+  for (let i = 0; i < 52; i++) {
+    if (i % 10 === 9) await until(async () => ((await call('hp', 'GET', '/api/transfers?limit=500')).body || []).filter(t => /^Screenshot/.test(t.fileName) && t.status !== 'done').length < 30, 30000);
+    await allySend(acer.id, `Screenshot ${String(i).padStart(2, '0')}.png`, 1024);
+  }
   await until(async () => ((await call('hp', 'GET', '/api/transfers?limit=500')).body || []).filter(t => /^Screenshot/.test(t.fileName) && t.status === 'done').length === 52, 30000);
   await call('hp', 'DELETE', `/api/transfers/${wall.id}`, {}); // finished again, as Cancelled: 1 Done clip + 52 screenshots + this
   await ev(`location.reload(); return 1`);

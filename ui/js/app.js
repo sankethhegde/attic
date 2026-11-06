@@ -65,6 +65,21 @@
       document.title = 'Set up · Attic Hub';
       return A.login.renderSetup(app, (opts) => { state.needsSetup = false; loginOpts = opts; A.background.engine.unmount(); go('#/login'); });
     }
+    // Feedback round 1: the reset link from the email, signed in or not; Forgot password and sign-up from sign-in.
+    if (seg === 'reset') {
+      leaveShell();
+      document.title = 'New password · Attic Hub';
+      return A.login.renderReset(app, r.query.token || '', (res) => {
+        if (state.session) { state.session = null; state.account = null; } // signed out everywhere by the HP
+        loginOpts = { username: res.username, notice: res.message };
+        go('#/login');
+      });
+    }
+    if (!state.session && (seg === 'forgot' || seg === 'signup')) {
+      leaveShell();
+      document.title = (seg === 'forgot' ? 'Forgot password' : 'Create an account') + ' · Attic Hub';
+      return seg === 'forgot' ? A.login.renderForgot(app) : A.login.renderSignup(app);
+    }
     if (!state.session) {
       if (seg !== 'login') return replace('#/login');
       leaveShell();

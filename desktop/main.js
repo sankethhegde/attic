@@ -331,7 +331,7 @@ async function startAgent() {
     getLast: () => (prefs.seen[s.serverId] == null ? null : prefs.seen[s.serverId]),
     setLast: seq => { prefs = prefsStore.save({ seen: { [s.serverId]: seq } }, mode && mode.mode); },
     show: (title, body) => notify(title, body, showWindow),
-    enabled: group => !!prefs.notify[group]
+    enabled: group => group === 'accounts' || !!prefs.notify[group] // sign-ups and approvals: always
   });
   agent = createAgent({ url: hubUrl(s), token: c.value, collect, pace: statsPace, onState: st => { agentState = st; }, onMessage: msg => {
     if (msg.type === 'event' || msg.type === 'events') feed.handle(msg);

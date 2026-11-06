@@ -393,6 +393,23 @@ Tests: `phone-test.mjs` 25/25. Also `node --test "agent/*.test.js"` 52/52, `smok
 
 Nothing in `desktop/` changed, so 0.11.0 stays installed. The new screens come from the HP once this branch is merged and the HP runs it.
 
+### Part 2: the screens that waited for the HP (6 Nov 2026)
+
+The HP's half was done in pull request #28. Checked in `accounts-test.mjs`, an emulated iPhone against a throwaway server. Email went to a local stand-in for Gmail.
+
+| Feedback | Result | How it was verified |
+| --- | --- | --- |
+| Usernames like Sankethhegde4321@gmail.com | ✅ | The master was set up as `Sankethhegde4321@gmail.com` and signed in as `SANKETHHEGDE4321@gmail.com` (case doesn't matter). A sign-up used `Priya.K@example.com` |
+| Forgot password, by email | ✅ | Sign-in → Forgot password? → "Check your email". The link arrived at the account's address, its page set a new password, and sign-in followed with the username filled in. The same link a second time is refused, with a link to ask for a new one |
+| Sign up, approved by the master | ✅ | Sign-in → Create an account → "Waiting for approval"; signing in before approval says so. The master's Dashboard shows "An account is waiting for your approval", and Approve lets it sign in. Decline removes it. The desktop tool also notifies the master of a sign-up, and the person when approved |
+| The master sets someone's password | ✅ | Dashboard → Set password; the person signed in with it |
+| The HP's Gmail, and your email | ✅ | Settings → Advanced → Email for password resets shows "On: reset links come from …" (Set up Gmail takes the address and a Google app password, checked with Gmail before it's kept). Send a test arrived at the email saved in Settings → Account → Email |
+| Faster sends | ✅ (HP) | The HP relays a send to the receiving PC as it arrives. The tests found one effect: since a send stays open until the PC has collected it, a burst of more than 50 can now meet the HP's limit of 50 waiting per sender; the transfers test sends in batches |
+
+Tests: `accounts-test.mjs` 10/10, `phone-test.mjs` 25/25, `node --test "agent/*.test.js"` 52/52, `node --test "server/*.test.js"` 174/174, and every desktop suite (`transfers-test.mjs` 17/17, twice, after the batching change). Packaged app: smoke, tray (20/20), update, low-resource and shortcuts tests pass. Installer: `Attic-Hub-Setup-0.12.0.exe`, 112 MB (the desktop tool changed: sign-up and approval notifications).
+
+For the final pass: set up Gmail on the HP with a real app password, and reset a password from the iPhone. Also send 60 photos from the iPhone to the ROG Ally while it's off, to see the 50-waiting limit for yourself.
+
 ## Problems found and fixed during the run
 
 1. **Focus after navigation:** after opening a folder or tab, keyboard focus fell back to the top of the page, so you had to Tab through the header again. It now moves into the new content.

@@ -4,7 +4,7 @@
   const { util: U, api, ui, background } = root.Attic;
 
   // The interface's version: the desktop tool's when it runs there; the HP serves the same files.
-  const VERSION = '0.11.0';
+  const VERSION = '0.12.0';
   const HUB_REQUIREMENTS_URL = 'https://claude.ai/artifact/PAvQYsCeT2cKm1oApbtzJv';
   const GUIDE_URL = 'https://claude.ai/artifact/1AXNgGjN22Pcmm2HtCqa3p';
 
@@ -37,6 +37,8 @@
         <div class="set-row"><div class="lbl"><label for="dname">Display name</label><small>Shown in the header and device list.</small></div>
           <div class="ctl"><input class="plain-input" id="dname" value="${U.esc(acc.displayName)}" maxlength="40" style="width:240px"></div></div>
         <div class="set-row"><div class="lbl">Username<small>Used to sign in. It can’t be changed.</small></div><div class="ctl mono">@${U.esc(acc.username)}</div></div>
+        <div class="set-row"><div class="lbl"><label for="email">Email</label><small>Where a password-reset link goes if you forget your password. You can also sign in with it.</small></div>
+          <div class="ctl"><input class="plain-input" id="email" type="email" value="${U.esc(acc.email || '')}" placeholder="you@example.com" maxlength="254" autocapitalize="none" autocorrect="off" spellcheck="false" style="width:240px"></div></div>
         <div class="set-row" style="display:block"><div class="lbl" style="margin-bottom:10px">This device<small>Detected automatically. Correct it if the guess is wrong — it’s remembered in this browser.</small></div><div id="this-device"></div></div>
         <div class="set-row"><div class="lbl">Paired with the HP as<small>The master can unpair a device from the Devices tab.</small></div>
           <div class="ctl" id="paired-as"><span class="skel" style="display:inline-block;width:140px;height:14px"></span></div></div>
@@ -109,6 +111,8 @@
 
       <section class="card" aria-labelledby="h-adv">
         <h2 id="h-adv">Advanced <span class="scope">Master</span></h2>
+        <div class="set-row" id="mail-row"><div class="lbl">Email for password resets<small id="mail-state">Checking…</small></div>
+          <div class="ctl" id="mail-ctl"></div></div>
         <div class="set-row"><div class="lbl">Export settings<small>Theme, background and view preferences as JSON, with the share list for reference.</small></div>
           <div class="ctl"><button class="btn btn-secondary btn-sm" id="export">${U.icon('download')}Export JSON</button></div></div>
         <div class="set-row"><div class="lbl">Import settings<small>Replaces this browser’s preferences with the file’s. Shares aren’t imported: add them above.</small></div>
@@ -270,6 +274,45 @@
         }
         explorerBox.onchange = async () => { show(await root.atticDesktop.prefs.set({ explorerMenu: explorerBox.checked })); ui.toast(explorerBox.checked ? '“Send to Attic Hub” is in File Explorer' : '“Send to Attic Hub” is gone from File Explorer'); };
       }
+    }
+
+    // Feedback round 1: your email (where reset links go).
+    const emailIn = main.querySelector('#email');
+    const saveEmail = async () => {
+      const v = emailIn.value.trim();
+      if (v === (state.account.email || '')) return;
+      if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v)) return ui.toast('That doesn’t look like an email address', 'error');
+      try { state.account = await api.updateEmail(acc.id, v); ui.toast(v ? 'Email saved' : 'Email removed'); }
+      catch (e) { ui.toast(e.message, 'error'); emailIn.value = state.account.email || ''; }
+    };
+    emailIn.onblur = saveEmail;
+    emailIn.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); emailIn.blur(); } };
+
+    // Master: the Gmail address the HP sends reset links from, with a Google app password.
+    const mailRow = main.querySelector('#mail-row');
+    if (mailRow) {
+      const st = mailRow.querySelector('#mail-state'), ctl = mailRow.querySelector('#mail-ctl');
+      const drawMail = m => {
+        if (!m || !m.configured) {
+          st.innerHTML = 'Off. Set up a Gmail address and Attic emails a reset link to anyone who forgets their password. It needs a Google <b>app password</b>: Google Account → Security → 2-Step Verification → App passwords.';
+          ctl.innerHTML = `<button class="btn btn-secondary btn-sm" id="mail-set">${U.icon('mail')}Set up Gmail</button>`;
+        } else {
+          st.innerHTML = `On: reset links come from <b>${U.esc(m.user)}</b>.`;
+          ctl.innerHTML = `<button class="btn btn-secondary btn-sm" id="mail-test">${U.icon('mail')}Send a test</button><button class="btn btn-ghost btn-sm" id="mail-set">Change</button><button class="btn btn-ghost btn-sm" id="mail-off">Turn off</button>`;
+        }
+        const set = ctl.querySelector('#mail-set'), test = ctl.querySelector('#mail-test'), off = ctl.querySelector('#mail-off');
+        if (set) set.onclick = () => mailDialog(m, drawMail);
+        if (test) test.onclick = async () => {
+          test.disabled = true;
+          try { const r = await api.testMail(); ui.toast(`Test email sent to ${r.to}`); } catch (e) { ui.toast(e.message, 'error'); }
+          test.disabled = false;
+        };
+        if (off) off.onclick = async () => {
+          if (!(await ui.confirm({ title: 'Turn off reset emails?', confirm: 'Turn off', lead: 'The HP forgets the Gmail address and its app password. You can still set anyone’s password from the Dashboard.' }))) return;
+          try { drawMail(await api.removeMail()); ui.toast('Reset emails are off'); } catch (e) { ui.toast(e.message, 'error'); }
+        };
+      };
+      api.getMail().then(drawMail).catch(e => { st.textContent = e.message; });
     }
 
     const dname = main.querySelector('#dname');
@@ -457,6 +500,29 @@
           after();
         } catch (e) { (e.code === 'INVALID' && /name/i.test(e.message) ? dlg.querySelector('#sh-name-msg') : dlg.querySelector('#sh-path-msg')).textContent = e.message; }
       } }]
+    });
+  }
+
+  // The HP signs in to Gmail with the app password before keeping it; it's never shown again.
+  function mailDialog(m, after) {
+    ui.dialog({
+      title: 'Email for password resets',
+      lead: 'Attic sends reset links from this Gmail address. Use an app password, not your Google password: Google Account → Security → 2-Step Verification → App passwords. It’s kept only on the HP.',
+      body: `<form class="form-grid" novalidate>
+        <div class="field no-icon"><input id="ml-user" type="email" placeholder=" " autocomplete="email" autocapitalize="none" spellcheck="false" value="${U.esc((m && m.user) || '')}"><label for="ml-user">Gmail address</label></div>
+        <div class="field no-icon"><input id="ml-pass" type="password" placeholder=" " autocomplete="off"><label for="ml-pass">App password (16 letters)</label></div>
+        <div class="form-error" id="ml-err" role="alert"></div></form>`,
+      actions: [
+        { label: 'Cancel', kind: 'secondary' },
+        { label: 'Check and save', kind: 'primary', onClick: async (close, dlg) => {
+          const user = dlg.querySelector('#ml-user').value.trim(), pass = dlg.querySelector('#ml-pass').value, err = dlg.querySelector('#ml-err');
+          if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(user)) { err.textContent = 'Enter the Gmail address to send from'; return; }
+          if (pass.replace(/\s/g, '').length < 8) { err.textContent = 'Paste the app password Google gave you'; return; }
+          err.textContent = 'Checking with Gmail…';
+          try { const r = await api.setMail(user, pass); close(); after(r); ui.toast('Reset emails are on'); }
+          catch (e) { err.textContent = e.message; }
+        } }
+      ]
     });
   }
 

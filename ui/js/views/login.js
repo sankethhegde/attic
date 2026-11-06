@@ -65,6 +65,126 @@
     return new Promise(r => { if (ui.reducedMotion()) return r(); card.classList.add('leaving'); setTimeout(r, 340); });
   }
 
+  // ---------- feedback round 1: forgot password, reset, sign up (the HP's side: PR #28) ----------
+  // The same card as sign-in, with a way back to it.
+  function card(app, inner) {
+    app.innerHTML = `<div class="stage" id="stage"><form class="login-card" novalidate>${ui.brand()}${inner}
+      <div style="text-align:center;margin-top:14px"><a class="link-btn" href="#/login">${U.icon('arrowLeft').replace('class="ic"', 'class="ic" style="width:16px;height:16px;vertical-align:-3px;margin-right:4px"')}Back to sign in</a></div>
+      ${HTTP_NOTE()}</form></div>`;
+    const stage = app.querySelector('#stage');
+    secureHint(stage);
+    background.engine.mount(stage);
+    const form = stage.querySelector('form');
+    wireEyes(form);
+    return form;
+  }
+  const done_ = (form, title, html) => {
+    form.innerHTML = `${ui.brand()}<h1>${U.esc(title)}</h1><div class="banner banner-info" role="status" style="margin:12px 0 0">${U.icon('check')}<span>${html}</span></div>
+      <a class="btn btn-primary btn-block" href="#/login" style="height:48px;margin-top:18px">Back to sign in</a>${HTTP_NOTE()}`;
+    form.querySelector('.btn').focus();
+  };
+
+  // Forgot password: the HP emails a one-time link if the account has an email and mail is set up.
+  function renderForgot(app) {
+    const form = card(app, `<h1>Forgot your password?</h1>
+      <p class="sub">Type your username or email. If your account has an email address, the HP sends a link to choose a new password. It works for 30 minutes.</p>
+      ${field({ id: 'fg-login', label: 'Username or email', icon: 'user', autocomplete: 'username' })}
+      <button class="btn btn-primary btn-block" type="submit" style="height:48px">Send the link</button>
+      <div class="form-error" id="fg-error" role="alert"></div>`);
+    const input = form.querySelector('#fg-login');
+    input.focus();
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      if (!input.value.trim()) { setFieldError(form, 'fg-login', 'Enter your username or email'); shake(form); return input.focus(); }
+      const btn = form.querySelector('[type=submit]');
+      busy(btn, true);
+      try {
+        const r = await api.forgotPassword(input.value);
+        done_(form, r.mail ? 'Check your email' : 'Ask the master', U.esc(r.message) + (r.mail ? ' Check your spam folder too.' : ' The master can set a new password for you in the Dashboard.'));
+      } catch (err) {
+        busy(btn, false, 'Send the link');
+        form.querySelector('#fg-error').innerHTML = U.icon('alertCircle') + `<span>${U.esc(err.message)}</span>`;
+        shake(form);
+      }
+    };
+  }
+
+  // The link from the email: #/reset?token=… → a new password, then sign in.
+  function renderReset(app, token, done) {
+    const form = card(app, `<h1>Choose a new password</h1>
+      <p class="sub">Your other devices are signed out when it changes.</p>
+      ${field({ id: 'rs-pass', label: 'New password', type: 'password', icon: 'lock', eye: true, autocomplete: 'new-password' })}
+      ${field({ id: 'rs-pass2', label: 'Confirm new password', type: 'password', icon: 'lock', eye: true, autocomplete: 'new-password' })}
+      <button class="btn btn-primary btn-block" type="submit" style="height:48px">Change password</button>
+      <div class="form-error" id="rs-error" role="alert"></div>`);
+    if (!token) form.querySelector('#rs-error').innerHTML = U.icon('alertCircle') + '<span>This link is incomplete. Ask for a new one from Forgot password.</span>';
+    form.querySelector('#rs-pass').focus();
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const p = form.querySelector('#rs-pass').value, p2 = form.querySelector('#rs-pass2').value;
+      setFieldError(form, 'rs-pass', p.length >= 6 ? '' : 'Use at least 6 characters');
+      setFieldError(form, 'rs-pass2', p2 === p ? '' : 'The passwords don’t match');
+      if (p.length < 6 || p !== p2) { shake(form); return; }
+      const btn = form.querySelector('[type=submit]');
+      busy(btn, true);
+      try {
+        const r = await api.resetPassword(token, p);
+        done({ username: r.username, message: r.message });
+      } catch (err) {
+        busy(btn, false, 'Change password');
+        const expired = /token|link|expired|invalid/i.test(err.message) || err.code === 'NOT_FOUND';
+        const msg = U.esc(err.message), ask = /Ask for a new one.$/.test(err.message);
+        form.querySelector('#rs-error').innerHTML = U.icon('alertCircle') + `<span>${ask ? msg.replace(/Ask for a new one.$/, '<a href="#/forgot">Ask for a new one</a>.') : msg + (expired ? ' <a href="#/forgot">Ask for a new link</a>.' : '')}</span>`;
+        shake(form);
+      }
+    };
+  }
+
+  // Sign up: a new account on this paired device, waiting for the master's approval.
+  function renderSignup(app) {
+    const form = card(app, `<h1>Create an account</h1>
+      <p class="sub">The master approves new accounts before they can sign in. Your files are private to you.</p>
+      ${field({ id: 'sg-name', label: 'Your name', icon: 'user', autocomplete: 'name' })}
+      ${field({ id: 'sg-user', label: 'Username or email', icon: 'user', autocomplete: 'username' })}
+      ${field({ id: 'sg-email', label: 'Email, for password resets (optional)', icon: 'mail', type: 'email', autocomplete: 'email' })}
+      ${field({ id: 'sg-pass', label: 'Password', type: 'password', icon: 'lock', eye: true, autocomplete: 'new-password' })}
+      ${field({ id: 'sg-pass2', label: 'Confirm password', type: 'password', icon: 'lock', eye: true, autocomplete: 'new-password' })}
+      <button class="btn btn-primary btn-block" type="submit" style="height:48px;margin-top:6px">Create account</button>
+      <div class="form-error" id="sg-error" role="alert"></div>`);
+    const v = id => form.querySelector('#' + id).value;
+    const emailRow = form.querySelector('[data-field="sg-email"]');
+    // A username that is an email address is the account's email too.
+    form.querySelector('#sg-user').addEventListener('input', () => { emailRow.hidden = /@/.test(v('sg-user')); });
+    form.querySelector('#sg-email').setAttribute('autocapitalize', 'none');
+    let deviceType = null;
+    root.Attic.device.current().then(d => { deviceType = d.type; }).catch(() => {});
+    form.querySelector('#sg-name').focus();
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const user = v('sg-user').trim(), email = emailRow.hidden ? '' : v('sg-email').trim();
+      const errs = {
+        'sg-name': v('sg-name').trim() ? '' : 'Enter your name',
+        'sg-user': !user ? 'Choose a username' : USERNAME_OK(user) ? '' : 'Use 3–32 letters, numbers, dots, dashes or underscores, or an email address',
+        'sg-email': !email || /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) ? '' : 'That doesn’t look like an email address',
+        'sg-pass': v('sg-pass').length >= 6 ? '' : 'Use at least 6 characters',
+        'sg-pass2': v('sg-pass2') === v('sg-pass') ? '' : 'The passwords don’t match'
+      };
+      Object.entries(errs).forEach(([k, m]) => setFieldError(form, k, m));
+      const bad = Object.keys(errs).find(k => errs[k]);
+      if (bad) { shake(form); return form.querySelector('#' + bad).focus(); }
+      const btn = form.querySelector('[type=submit]');
+      busy(btn, true);
+      try {
+        const r = await api.signUp({ displayName: v('sg-name'), username: user, password: v('sg-pass'), email, deviceType });
+        done_(form, 'Waiting for approval', `Thanks, ${U.esc(r.account.displayName)}. ${U.esc(r.message)} You can sign in as <b>${U.esc(r.account.username)}</b> once it’s approved.`);
+      } catch (err) {
+        busy(btn, false, 'Create account');
+        form.querySelector('#sg-error').innerHTML = U.icon('alertCircle') + `<span>${U.esc(err.message)}</span>`;
+        shake(form);
+      }
+    };
+  }
+
   // ---------- first run ----------
   function renderSetup(app, done) {
     app.innerHTML = `<div class="stage" id="stage">
@@ -124,6 +244,7 @@
         <span class="mode-badge">${U.icon('shield')}Master access</span>
         <h1 id="lg-title"></h1>
         <p class="sub" id="lg-sub"></p>
+        ${opts.notice ? `<div class="banner banner-info" role="status">${U.icon('check')}<span>${U.esc(opts.notice)}</span></div>` : ''}
         <div id="lg-device" class="lg-device"></div>
         ${field({ id: 'lg-user', label: 'Username or email', icon: 'user', autocomplete: 'username', value: opts.username })}
         ${field({ id: 'lg-pass', label: 'Password', type: 'password', icon: 'lock', eye: true, autocomplete: 'current-password' })}
@@ -131,6 +252,7 @@
           <span class="field-hint" id="caps" hidden>Caps Lock is on</span></div>
         <button class="btn btn-primary btn-block" type="submit" style="height:48px">Sign in</button>
         <div class="form-error" id="lg-error" role="alert"></div>
+        <div class="lg-links"><a class="link-btn" href="#/forgot" id="lg-forgot">Forgot password?</a><a class="link-btn" href="#/signup" id="lg-signup">Create an account</a></div>
         <div id="lg-switch"></div>
         ${HTTP_NOTE()}
       </form>
@@ -146,6 +268,7 @@
     function setMode(m, focus) {
       mode = m;
       card.classList.toggle('master', m === 'master');
+      form.querySelector('#lg-signup').hidden = m === 'master'; // the master's account already exists
       form.querySelector('#lg-title').textContent = m === 'master' ? 'Master sign-in' : 'Welcome back';
       form.querySelector('#lg-sub').textContent = m === 'master'
         ? 'Full access to every share, device and setting.'
@@ -287,5 +410,5 @@
     };
   }
 
-  root.Attic.login = { renderSetup, renderLogin, renderPair };
+  root.Attic.login = { renderSetup, renderLogin, renderPair, renderForgot, renderReset, renderSignup };
 })(window);

@@ -255,7 +255,7 @@ try {
   const d = dash ? JSON.parse(dash) : {};
   check('a phone isn’t offered what it can’t do: no Choose a folder, no Drag files here, no Publish an update', sendBtns.files && !sendBtns.folder && !d.drag && d.browse === 'Choose photos or files' && publish === 'false',
     `${JSON.stringify(sendBtns)} ${dash} publish visible ${publish}`);
-  const toast = await ev(`Attic.ui.toast('A toast'); await new Promise(r => setTimeout(r, 400)); const t = document.querySelector('.toast').getBoundingClientRect(), b = document.querySelector('.tabs').getBoundingClientRect(); return { toast: Math.round(t.bottom), tabs: Math.round(b.top) }`);
+  const toast = await ev(`Attic.ui.toast('A toast'); await new Promise(r => setTimeout(r, 900)); /* after its 0.2 s rise */ const t = document.querySelector('.toast').getBoundingClientRect(), b = document.querySelector('.tabs').getBoundingClientRect(); return { toast: Math.round(t.bottom), tabs: Math.round(b.top) }`);
   check('toasts sit above the tab bar', toast.toast <= toast.tabs, JSON.stringify(toast));
 
   // 5. 4-2: a big "video" from the camera roll, uploaded and sent in pieces over a slow Wi-Fi that drops.
