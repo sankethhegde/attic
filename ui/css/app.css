@@ -925,3 +925,41 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .secure-hint .ph-steps { margin: 6px 0 12px; }
 /* Things a phone can't do (choose a folder, drag files, build an installer). */
 .handheld .desktop-only { display: none !important; }
+
+/* ---------- feedback 1 (6 Nov 2026) ---------- */
+/* Files: the shared folders on a drive, listed like folders; Back on every level below This PC. */
+.folder-list { display: grid; gap: 2px; }
+.folder-list .row { position: relative; height: 60px; }
+.folder-list .row .sub { display: block; font-size: 12.5px; color: var(--muted); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-list .row.unavailable { opacity: .6; }
+.back-btn { margin-left: -8px; max-width: 220px; }
+.back-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drive-card .path { font-family: inherit; }
+/* Videos: the video's own frame as its thumbnail, under the play button. */
+.vthumb { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; background: #000; }
+.vcard .play, .ftile .fbadge { position: relative; z-index: 1; }
+/* Photos and Videos, By folder: a tile per folder, its cover from its newest item. */
+.ftile { border: 1px solid var(--line-soft); background: var(--surface); border-radius: 14px; overflow: hidden; cursor: pointer; padding: 0; text-align: left; font: inherit; color: inherit; display: flex; flex-direction: column; min-width: 0; }
+.ftile:hover { border-color: var(--accent); }
+.ftile .cover { aspect-ratio: 1; background: var(--skeleton) center/cover; position: relative; display: block; }
+.ftile.wide .cover { aspect-ratio: 16/9; }
+.ftile .fbadge { position: absolute; left: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 4px; background: rgba(10, 12, 28, .7); color: #fff; font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 999px; }
+.ftile .fbadge .ic { width: 14px; height: 14px; }
+.ftile .meta { padding: 8px 10px 10px; display: block; min-width: 0; }
+.ftile .nm { display: block; font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ftile .c { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; min-width: 0; }
+.folder-bar-nm { display: flex; flex-direction: column; min-width: 0; }
+.folder-bar-nm b, .folder-bar-nm .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-bar-nm .muted { font-size: 12.5px; }
+/* Dashboard: shares, the storage bar and the file count open what they show. */
+.share-row-link { color: inherit; text-decoration: none; border-radius: 10px; cursor: pointer; }
+.share-row-link:hover { background: var(--surface-2); }
+.share-row-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.segbar .s.go { cursor: pointer; }
+.dash-link { text-decoration: none; }
+.dash-link:hover { text-decoration: underline; color: var(--accent); }
+@media (pointer: coarse) {
+  .crumb { min-width: 40px; }
+  .dash-link { display: inline-flex; align-items: center; min-height: 40px; }
+}

@@ -40,7 +40,8 @@
 
     function detailHTML(x) {
       const of = `<span class="mono">${U.formatBytes(x.bytesDone || 0)}</span> of <span class="mono">${U.formatBytes(x.size)}</span>`;
-      const speed = x.speed ? ` · <span class="mono">${U.formatBytes(x.speed)}/s</span>` : '';
+      const left = x.speed && x.size > (x.bytesDone || 0) ? ui.timeLeft((x.size - (x.bytesDone || 0)) / x.speed) : '';
+      const speed = x.speed ? ` · <span class="mono">${U.formatBytes(x.speed)}/s</span>${left ? ' · ' + left : ''}` : '';
       const tries = x.attempts > 1 ? ` · try ${x.attempts}` : '';
       if (x.status === 'active' && x.stage === 'deliver') return `Delivering to ${nameOf(x.to, x.toName)} · ${of}${speed}`;
       if (x.status === 'active' && needsFile(x)) {

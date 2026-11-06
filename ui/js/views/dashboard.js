@@ -72,7 +72,7 @@
       main.querySelector('#summary').innerHTML = `
         <div class="card-head"><h2 id="sum-h">Storage across all shares</h2></div>
         <div class="hero-num">${U.formatBytes(t.used)} <small>of ${U.formatBytes(t.total)} used${t.drives > 1 ? ` on ${t.drives} drives` : t.drives === 1 ? ' on 1 drive' : ''}</small></div>
-        <div class="status-line"><b style="font-size:17px">${U.formatPct(p)}</b>${statusTag(p)}<span class="muted" style="font-size:13px">${U.formatCount(t.count)} files on ${s.shares.length} shares</span></div>
+        <div class="status-line"><b style="font-size:17px">${U.formatPct(p)}</b>${statusTag(p)}<a class="muted dash-link" style="font-size:13px" href="#/files">${U.formatCount(t.count)} files on ${s.shares.length} shares</a></div>
         <div class="segbar-wrap ${level(p)}"><div class="segbar" role="img" aria-label="${segs.map(x => `${U.CATEGORY_LABEL[x.key]} ${U.formatBytes(x.size)}`).join(', ')}">
           ${segs.map(x => `<span class="s" data-k="${x.key}" style="flex:${x.size} 1 0;background:${color(x.key)}"></span>`).join('')}</div></div>
         <p class="muted" style="font-size:12.5px;margin:10px 0 0">Files in your shares are coloured by type, matching <a href="#by-type" id="to-type">Storage by type</a> below.${t.outside ? ' The hatched band is other data on the same drives.' : ''} The grey end is free space.</p>`;
@@ -81,6 +81,10 @@
         const x = segs.find(g => g.key === el.dataset.k);
         el.onmousemove = ev => showTip(ev, `<div class="t"><span class="sw" style="background:${color(x.key)}"></span>${U.CATEGORY_LABEL[x.key]}</div><div class="mono">${U.formatBytes(x.size)}</div><div class="muted">${U.formatPct(U.pct(x.size, t.total))} of capacity</div>`);
         el.onmouseleave = hideTip;
+        if (U.CATEGORY_LABEL[x.key] && x.key !== 'outside' && x.key !== 'free' && x.count != null) {
+          el.classList.add('go');
+          el.onclick = () => { hideTip(); ctx.go('#/dashboard/' + x.key); };
+        }
       });
       main.querySelector('#to-type').onclick = (e) => { e.preventDefault(); main.querySelector('#by-type').scrollIntoView({ behavior: ui.reducedMotion() ? 'auto' : 'smooth' }); };
     }
@@ -92,14 +96,14 @@
           <div class="share-row head"><span></span><span>Share</span><span>Usage</span><span class="num">Used</span><span class="num">Free</span><span class="num">Total</span></div>
           ${s.shares.map(x => {
             const p = U.pct(x.used, x.total);
-            return `<div class="share-row${x.available ? '' : ' unavailable'}">
+            return `<a class="share-row share-row-link${x.available ? '' : ' unavailable'}" href="#/files/${encodeURIComponent(x.id)}" aria-label="Open ${U.esc(x.name)} in Files">
               <span class="icon-tile" style="color:var(--muted)">${U.shareIcon(x.deviceType)}</span>
               <span style="min-width:0"><span class="nm">${U.esc(x.name)}</span> ${x.available ? '' : `<span class="tag">${U.icon('cloudOff')}Unavailable</span>`}
                 <span class="c" style="display:block">${SHARE_KIND[x.deviceType] || 'Drive'}${x.available ? '' : ' · last seen ' + U.absDate(x.lastSeenAt, true)}</span></span>
               <span class="bar-cell"><span class="meter ${x.available ? level(p) : ''}" style="display:block" role="img" aria-label="${U.formatPct(p)} full"><span style="width:${p.toFixed(1)}%"></span></span>
                 <span class="c">${U.formatPct(p)} full${p >= 90 ? ' — almost full' : p >= 80 ? ' — getting full' : ''}</span></span>
               <span class="num mono">${U.formatBytes(x.used)}</span><span class="num mono hide-sm">${U.formatBytes(x.free)}</span><span class="num mono hide-sm">${U.formatBytes(x.total)}</span>
-            </div>`;
+            </a>`;
           }).join('')}
         </div>`;
     }
@@ -310,7 +314,7 @@
     ui.dialog({
       title: 'Add device', lead: 'Each device gets its own account, so it can be revoked on its own if it’s lost.',
       body: `<form id="dev-form" class="form-grid" novalidate>
-        ${f('d-name', 'Display name (e.g. Pixel 8)')}${f('d-user', 'Username')}${f('d-pass', 'Password', 'password')}
+        ${f('d-name', 'Display name (e.g. Pixel 8)')}${f('d-user', 'Username or email', 'text', 'autocapitalize="none" autocorrect="off" spellcheck="false"')}${f('d-pass', 'Password', 'password')}
         <div class="field no-icon"><select id="d-type">${['phone', 'tablet', 'laptop', 'desktop', 'other'].map(t => `<option value="${t}">${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}</select><label for="d-type">Device type</label><div class="field-msg"></div></div>
         <p class="form-note" style="margin-top:0">${U.icon('info')}<span>The device signs in with this password. Attic stores only a hash of it, so it can’t be shown again.</span></p></form>`,
       actions: [
