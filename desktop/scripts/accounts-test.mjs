@@ -171,6 +171,37 @@ try {
   check('Settings: your email is saved; reset emails show as on, and Send a test arrives', me && me.account.email === 'sanketh.backup@example.com' && /attic\.hp@gmail\.com/.test(mailState || '') && test && test.to === 'sanketh.backup@example.com',
     `email ${me && me.account.email}; “${mailState}”; test to ${test && test.to}`);
 
+  // 3b. Phase 5: Settings → People Portfolio. The master sets the save folder and the page's address, makes
+  // a key (shown once), and the "People Portfolio page" then uses it from its own address.
+  fs.mkdirSync(path.join(tmp, 'share', 'Backups', 'People'), { recursive: true });
+  await ev(`location.hash = '#/settings'; return 1`);
+  await waitFor(`document.querySelector('#pp-card[data-loaded]')`, 15000);
+  await ev(`document.querySelector('#pp-share').value = 'main'; return 1`);
+  await fill('#pp-path', 'Backups/People');
+  await ev(`document.querySelector('#pp-save-folder').click(); return 1`);
+  await sleep(600);
+  await fill('#pp-origins', 'http://localhost:5173');
+  await ev(`document.querySelector('#pp-save-origins').click(); return 1`);
+  await sleep(600);
+  await ev(`document.querySelector('#pp-key').click(); return 1`);
+  const ppKey = await waitFor(`document.querySelector('#pp-key-value') && document.querySelector('#pp-key-value').value`);
+  await ev(`const v = document.querySelector('.veil'); if (v) v.remove(); return 1`);
+  const ppState = await waitFor(`/A key is set/.test(document.querySelector('#pp-key-state').textContent) && document.querySelector('#pp-key-state').textContent`);
+  const pageCall = (method, url, body, origin = 'http://localhost:5173') => new Promise((resolve, reject) => {
+    const data = body ? Buffer.from(JSON.stringify(body)) : null;
+    const q = http.request({ host: '127.0.0.1', port: HTTP_PORT, path: url, method, headers: Object.assign({ Origin: origin, 'X-Attic-Key': ppKey }, data ? { 'Content-Type': 'application/json', 'Content-Length': data.length } : {}) },
+      res => { let t = ''; res.setEncoding('utf8'); res.on('data', d => { t += d; }); res.on('end', () => { let j = null; try { j = JSON.parse(t); } catch {} resolve({ status: res.statusCode, json: j }); }); });
+    q.on('error', reject); q.end(data);
+  });
+  const ping = await pageCall('GET', '/api/people/ping');
+  const saved = await pageCall('PUT', '/api/people/data', { app: 'people-portfolio', version: 1, exportedAt: new Date().toISOString(), labelGroups: [], labels: [], people: [{ id: 'a', name: 'Asha' }] });
+  const loaded = await pageCall('GET', '/api/people/data');
+  const elsewhere = await pageCall('GET', '/api/people/ping', null, 'http://some-other-site.example');
+  check('Settings → People Portfolio: folder, address and a key shown once; with it the page saves and loads, and another site is refused',
+    ppKey && /A key is set/.test(ppState || '') && ping.json && ping.json.ok && saved.status === 201 && loaded.json && loaded.json.people[0].name === 'Asha' && elsewhere.status === 403
+      && fs.readdirSync(path.join(tmp, 'share', 'Backups', 'People')).length === 1,
+    `ping ${ping.status}, save ${saved.status} ${saved.json && saved.json.name}, load ${loaded.status}, other site ${elsewhere.status}`);
+
   // 4. The master sets Priya's password.
   await ev(`location.hash = '#/dashboard'; return 1`);
   await waitFor(`document.querySelector('[data-setpass]')`, 15000);

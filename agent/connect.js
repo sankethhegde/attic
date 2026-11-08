@@ -49,10 +49,55 @@ async function hello({ address, port }, { timeoutMs = 2500, fetchImpl = fetch } 
   return { serverId: body.serverId, name: String(body.name || 'Attic server').slice(0, 64), address, port };
 }
 
-// The search itself. `deps` lets tests replace the network: { find, hello }.
+// ---------- two more ways to find the HP (Wi-Fi fix, 8 Nov 2026) ----------
+// Over Wi-Fi a discovery broadcast is often lost: access points drop or rate-limit broadcasts, and on a
+// network Windows calls "Public" the firewall can drop the HP's reply. So, when the broadcast hears
+// nothing, the tool also:
+//   - asks for the HP by its PC name (the name it answered with last time, e.g. DESKTOP-UL55ECB, and
+//     <name>.local), which Windows resolves on the home network even after the HP's address changed;
+//   - knocks on every address of this PC's home network (a /24, up to 254 hosts) at the HTTP port, a few
+//     dozen at a time, and asks each that answers whether it's Attic. Plain outgoing TCP: nothing for a
+//     firewall or a Wi-Fi access point to drop. It takes a second or two.
+const net = require('net');
+const os = require('os');
+const isPrivate = ip => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip);
+// The /24 around each of this PC's private IPv4 addresses (a bigger subnet is narrowed to this PC's /24),
+// this PC's own address included.
+function sweepTargets(interfaces = os.networkInterfaces()) {
+  const out = [];
+  for (const list of Object.values(interfaces || {})) {
+    for (const a of list || []) {
+      if (a.family !== 'IPv4' || a.internal || !isPrivate(a.address)) continue;
+      const base = a.address.split('.').slice(0, 3).join('.');
+      for (let i = 1; i < 255; i++) { const ip = `${base}.${i}`; if (!out.includes(ip)) out.push(ip); } // this PC too: cheap, and simple
+    }
+  }
+  return out;
+}
+function knock(address, port, timeoutMs) {
+  return new Promise(resolve => {
+    const s = net.connect({ host: address, port });
+    const done = ok => { s.destroy(); resolve(ok); };
+    s.setTimeout(timeoutMs, () => done(false));
+    s.once('connect', () => done(true));
+    s.once('error', () => done(false));
+  });
+}
+async function sweep({ port = DEFAULT_HTTP_PORT, targets = sweepTargets(), timeoutMs = 700, concurrency = 64 } = {}, ask = s => hello(s)) {
+  const open = [];
+  let next = 0;
+  const worker = async () => { while (next < targets.length) { const ip = targets[next++]; if (await knock(ip, port, timeoutMs)) open.push(ip); } };
+  await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, worker));
+  const found = [];
+  for (const ip of open) { try { found.push(await ask({ address: ip, port })); } catch (e) { /* something else on that port */ } }
+  return found;
+}
+
+// The search itself. `deps` lets tests replace the network: { find, hello, sweep }.
 async function search({ remembered, discoveryPort = DEFAULT_PORT, timeoutMs = 1500, rounds = 2, onProgress = () => {} } = {}, deps = {}) {
   const find = deps.find || (opts => findServers(opts));
   const ask = deps.hello || (s => hello(s));
+  const scan = deps.sweep || (port => sweep({ port }, ask));
 
   if (remembered && remembered.address) {
     onProgress({ step: 'remembered', server: remembered });
@@ -62,21 +107,38 @@ async function search({ remembered, discoveryPort = DEFAULT_PORT, timeoutMs = 15
     } catch (e) { /* moved or off — fall through to discovery */ }
   }
 
-  let answers = [], error = null;
-  for (let i = 0; i < rounds && !answers.length; i++) {
-    onProgress({ step: 'broadcast', round: i + 1 });
-    try { answers = await find({ port: discoveryPort, timeoutMs }); }
-    catch (e) { error = e.message; }
-  }
-
-  // Confirm each answer over HTTP; drop anything that doesn't match what it claimed.
-  const confirmed = [];
-  for (const a of answers) {
-    try {
-      const s = await ask({ address: a.address, port: a.port });
-      if (s.serverId === a.serverId) confirmed.push(s);
-    } catch (e) { /* answered UDP but not HTTP: firewall on TCP, or not Attic */ }
-  }
+  // Then three ways at once, so a round takes a few seconds rather than the sum of them: the HP by its PC
+  // name (right even after DHCP gave it a new address), the broadcast, and the knock on every address
+  // (for when Wi-Fi or a firewall drops the broadcast).
+  const port = (remembered && remembered.port) || DEFAULT_HTTP_PORT;
+  const host = remembered ? String(remembered.name || '') : '';
+  onProgress({ step: 'broadcast', round: 1 });
+  const byName = /^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/.test(host)
+    ? Promise.all([host, host + '.local'].map(address => ask({ address, port }).catch(() => null)))
+      .then(list => list.find(s => s && (!remembered.serverId || s.serverId === remembered.serverId)) || null)
+    : Promise.resolve(null);
+  let error = null;
+  const viaBroadcast = (async () => {
+    let answers = [];
+    for (let i = 0; i < rounds && !answers.length; i++) {
+      try { answers = await find({ port: discoveryPort, timeoutMs }); }
+      catch (e) { error = e.message; }
+    }
+    // Confirm each answer over HTTP; drop anything that doesn't match what it claimed.
+    const ok = [];
+    for (const a of answers) {
+      try {
+        const s = await ask({ address: a.address, port: a.port });
+        if (s.serverId === a.serverId) ok.push(s);
+      } catch (e) { /* answered UDP but not HTTP: firewall on TCP, or not Attic */ }
+    }
+    return { answers, ok };
+  })();
+  const viaSweep = scan(port).catch(() => []);
+  const [named, b, swept] = await Promise.all([byName, viaBroadcast, viaSweep]);
+  if (named) return { state: 'connected', server: named, via: 'name' };
+  const answers = b.answers, confirmed = b.ok.slice();
+  for (const s of swept) if (!confirmed.some(c => c.serverId === s.serverId)) confirmed.push(s);
 
   if (remembered && remembered.serverId) {
     const same = confirmed.find(s => s.serverId === remembered.serverId);
@@ -106,4 +168,4 @@ function store(file) {
   };
 }
 
-module.exports = { normalizeAddress, hello, search, store, urlFor, DEFAULT_HTTP_PORT };
+module.exports = { normalizeAddress, hello, search, sweep, sweepTargets, store, urlFor, DEFAULT_HTTP_PORT };

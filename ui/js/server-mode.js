@@ -85,7 +85,25 @@
       ${row('Service', !t ? 'Not installed' : t.ours ? `Installed · starts with Windows${t.state === 'running' ? ' · running' : ''}` : 'Installed, but for another copy of the server', t ? t.ours && t.state === 'running' : null)}
       ${row('Server', srv ? `Answering as <b>${U.esc(srv.name)}</b> on port <span class="mono">${s.port}</span>${srv.byHand ? ' · started by hand, not by Attic Hub' : ''}` : `Not running (port <span class="mono">${s.port}</span>)`, !!srv)}
       ${sup ? row('Supervisor', `Running since ${U.relDate(sup.since).toLowerCase()}${sup.startedNow ? ', until Attic Hub closes' : ''}${sup.restarts ? ` · ${sup.restarts} restart${sup.restarts === 1 ? '' : 's'}` : ''}`) : ''}
+      ${addressRow(s)}
     </div>`;
+  }
+  // This PC's address on the home network (8 Nov 2026): what the other devices, a browser or the iPhone use.
+  function addressRow(s) {
+    const n = st.network;
+    if (!n) return '';
+    const port = s.port || 8080;
+    const list = n.addresses.length ? n.addresses.map(a => `<span class="srv-ip"><b class="mono" data-ip>${U.esc(a.address)}</b> <span class="muted">(${U.esc(a.via)})</span></span>`).join('<br>') : 'Not connected to a network';
+    const first = n.addresses[0];
+    return `<div class="srv-row"><span class="k">Address</span><span class="v">${list}
+      ${first ? `<br><span class="muted">In a browser: <span class="mono">http://${U.esc(first.address)}:${port}</span> · by name: <span class="mono">${U.esc(n.hostname)}</span></span>` : ''}</span></div>`;
+  }
+  // A laptop that sleeps when its lid closes takes Attic away from every device.
+  function lidHTML() {
+    const n = st.network;
+    if (!n || n.lidSleeps !== true) return '';
+    return `<div class="banner banner-warning" role="status">${U.icon('alert')}<span>Closing this PC’s lid puts it to sleep, and the other devices lose Attic until it wakes. Attic Hub already stops it sleeping when idle.</span>
+      <button type="button" class="btn btn-secondary btn-sm" data-act="lid">Keep running with the lid closed</button></div>`;
   }
   function actionsHTML(s) {
     const t = s.task, running = !!s.server, b = (a, label, kind, icon) => `<button type="button" class="btn btn-${kind}" data-act="${a}">${icon ? U.icon(icon) : ''}${label}</button>`;
@@ -120,6 +138,7 @@
     return `<p class="sub">Every other device reaches Attic through this PC. ${s.task && s.task.ours ? 'It starts with Windows, before anyone signs in, and restarts itself after a crash.' : 'Install it as a service so it starts with Windows, before anyone signs in.'}</p>
       ${banner()}
       ${updateHTML()}
+      ${lidHTML()}
       ${!st.installable ? `<div class="banner banner-info">${U.icon('info')}<span>This is a development copy. It can start the server for now; installing the service is done from the installed Attic Hub.</span></div>` : ''}
       ${statusRows(s)}
       ${actionsHTML(s)}
@@ -145,6 +164,11 @@
       lead: 'The server stops and no longer starts with Windows. Files, accounts and settings stay where they are. Windows asks for permission.' }))) return;
     if (name === 'stop' && !(await ui.confirm({ title: 'Stop the server?', confirm: 'Stop',
       lead: 'Every device loses Attic until it starts again. Files waiting for a device are kept.' }))) return;
+    if (name === 'lid') {
+      const r = await sm.lidStayAwake();
+      msg = r && r.error ? { kind: 'danger', text: r.error } : { kind: 'info', text: 'Done: plugged in, this PC keeps running with the lid closed.' };
+      return refresh();
+    }
     if (name === 'update') {
       if (!(await ui.confirm({ title: `Update to Attic Hub ${upd.latest.version}?`, confirm: 'Restart and update',
         lead: 'The server stops for a moment while the new version installs, then starts again. Devices reconnect by themselves.' }))) return;

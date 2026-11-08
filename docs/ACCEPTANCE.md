@@ -441,3 +441,19 @@ Tests: `node --test "agent/*.test.js"` 54/54, `update-test.mjs` 14/14 on the dev
 ### More than 50 files at once (6 Nov 2026)
 
 The HP holds at most 50 of one account's transfers waiting at once, and since the relay a send stays open until the device has collected it. The Send dialog now waits for room instead of failing at file 51: "Waiting for ROG Ally to collect earlier files (the HP holds 50 at a time)…". If nothing is collected for two minutes (the device is off), it stops and says how many went. `transfers-test.mjs` (19/19, twice): 55 files to a device that collects them all arrived after waiting for room; with nobody collecting, it stopped with "48 of 55 files are on their way…". The limit itself is the HP's to raise, if you'd like a bigger batch to wait for a device that's off.
+
+## Wi-Fi connection fix, the HP's address, and Phase 5 (Attic's side) (8 Nov 2026)
+
+| Check | Result | How it was verified |
+| --- | --- | --- |
+| A client connects without "Search again" when the HP comes on later | ✅ | `wifi-connect-test.mjs`: the client started first and said it was still looking (try 2, 3…). The server then started with broadcasts off and the remembered address wrong, and the client connected by itself in about 6 s, through the network sweep |
+| A changed address is found by the HP's PC name | ✅ | Same test: a wrong address with the right PC name connected in about 7 s |
+| The HP's firewall opens to the home network on install | ✅ (script) | `service.test.js`: TCP 8080/8443 and UDP 41980, local subnet only, any profile, old rules removed first. Running it needs the real HP (Administrator prompt) |
+| Server mode shows the HP's address | ✅ | `mode-test.mjs`: "Address 192.168.1.5 (Wi-Fi) · In a browser: http://192.168.1.5:… · by name: Sanks-World", plus a lid-sleep warning with a fix button when it applies |
+| 5-1: Attic accepts People Portfolio | ✅ | `people.test.js` (5/5): the settings, a key shown once (only its hash kept; a new one stops the old), the page-address and key checks with CORS and Chrome's private-network preflight, 31 saves keeping 30, loading the newest or a named one. `accounts-test.mjs`: Settings → People Portfolio end to end, then the page saving and loading with the key, and another site refused |
+| 5-3 (HP side): folders and photos | ✅ | `people.test.js`: shares, a folder's subfolders and photos only, a photo served inline, the small preview taken from the JPEG's own EXIF thumbnail (no image library), and a path outside the share refused |
+| 5-2 and 5-3's screens in People Portfolio | — | People Portfolio's own project (not changed here, as asked) |
+
+Tests: agent 57/57, server 180/180, `phone-test.mjs` 25/25 (Settings fields no longer widen the page at 320 px), and every desktop suite including `wifi-connect-test.mjs` 3/3. Version 0.13.0.
+
+For the final pass: on the HP, install (or reinstall) the service so the firewall rules are added, then switch the HP off and on with the Ally waiting: it should connect by itself.

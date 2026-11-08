@@ -17,6 +17,7 @@ const { createTransfers, publicTransfer } = require('./transfers');
 const { openDb } = require('./db');
 const { createEvents } = require('./events');
 const { createUpdates, publicRelease } = require('./updates');
+const { createPeople } = require('./people');
 const { createTls } = require('./tls');
 const { createUploads } = require('./uploads');
 const { createMail } = require('./mail');
@@ -66,9 +67,14 @@ const CONFIG = loadConfig();
 const auth = createAuth(DATA_DIR);
 // Shares can be edited from Settings (milestone 6), so the file layer is rebuilt whenever they change.
 let files;
-function useShares(list) { CONFIG.shares = list; files = createFiles(list, createSafePath(list)); }
+let safePathNow = null;
+function useShares(list) { CONFIG.shares = list; safePathNow = createSafePath(list); files = createFiles(list, safePathNow); }
 useShares(CONFIG.shares);
 const own = createOwnership(DATA_DIR);
+// Phase 5: People Portfolio saves to Attic and picks photos from it, as the master (people.js).
+const masterView = () => { const a = auth.listAccounts().find(x => x.type === 'master'); return own.view({ accountId: a ? a.id : null, type: 'master' }); };
+const people = createPeople({ dataDir: DATA_DIR, files: () => Object.assign(Object.create(files), { shares: () => CONFIG.shares }), safePath: () => safePathNow,
+  masterView, serverName: os.hostname(), log: m => console.log("  " + m) });
 const MAX_UPLOAD = 20e9;
 // Who this server is: a stable id (kept in data/) and the PC's name. Discovery answers with them, and
 // /api/hello repeats them so a client that found an address can check it reached the HP it meant.
@@ -440,6 +446,9 @@ async function inOneStep(changeOwnership, changeAccount) {
 
 async function handleApi(req, res, url, query) {
   const m = req.method;
+  // Phase 5: People Portfolio's key routes come from its own page's address, with the master's key in a
+  // header instead of a cookie: their own checks (key, allowed address, home network), and CORS for them.
+  if (/^\/api\/people\/(ping|data|saves|folders|photo)$/.test(url)) return people.handle(req, res, url, query, { send: sendJSON, sendFile });
   const upload = (/^\/api\/(shares|transfers)\/[A-Za-z0-9_-]{1,64}\/file$/.test(url) || /^\/api\/updates\/files\/[^/]+$/.test(url) || /^\/api\/uploads\/[A-Za-z0-9_-]{1,64}$/.test(url)) && m === 'PUT';
   if (m !== 'GET' && m !== 'HEAD') checkWrite(req, upload);
   const body = !upload && (m === 'POST' || m === 'PATCH' || m === 'PUT') ? await readBody(req) : {};
@@ -546,6 +555,14 @@ async function handleApi(req, res, url, query) {
   }
 
   // ---------- the HP's email (feedback round 1, master) ----------
+  // ---------- People Portfolio (Phase 5, master): the save folder, the allowed page addresses, the key ----------
+  if (url === '/api/people/settings') {
+    requireMaster(req);
+    if (m === 'GET') return sendJSON(res, 200, people.publicSettings());
+    if (m === 'PUT') return sendJSON(res, 200, await people.setSettings({ folder: body.folder, origins: body.origins }));
+  }
+  if (url === '/api/people/key' && m === 'POST') { requireMaster(req); return sendJSON(res, 201, people.newKey()); }
+
   if (url === '/api/mail') {
     requireMaster(req);
     if (m === 'GET') return sendJSON(res, 200, mail.info());
