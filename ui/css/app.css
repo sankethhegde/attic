@@ -970,3 +970,8 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .lg-links { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 10px; font-size: 14px; }
 .lg-links a { text-decoration: none; }
 .lg-links a[hidden] { display: none; }
+/* Settings fields never push past a phone's screen (People Portfolio's address box, 320 px). */
+.set-row .ctl { max-width: 100%; min-width: 0; }
+.set-row .ctl .plain-input, .set-row .ctl .plain-select, .set-row .ctl textarea { max-width: 100%; }
+.settings { grid-template-columns: minmax(0, 1fr); } /* a long address can't widen every card */
+.set-row .lbl { min-width: 0; overflow-wrap: anywhere; }

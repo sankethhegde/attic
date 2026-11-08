@@ -562,6 +562,50 @@ Then:
 
 `feedback1.test.js` covers all four. The email part uses a stand-in for Gmail: a local TLS SMTP server, trusted through `ATTIC_MAIL_CA`.
 
+## People Portfolio (Phase 5, 5-1 and 5-3)
+
+People Portfolio stays its own web page. Attic is where it saves its details, and where it can pick photos from. `people.js` does it.
+
+**Set up once, as the master** (Settings → People Portfolio; same-origin, signed in):
+
+| Route | Does |
+| --- | --- |
+| `GET / PUT /api/people/settings` | `{ folder: { shareId, path }, origins }`: the save folder (it must exist inside a share) and the page addresses allowed to use the key |
+| `POST /api/people/key` | A new key, returned once; only its SHA-256 is kept (`data/people.json`), and the old key stops working |
+
+**The page's routes**, called from People Portfolio's own address with the key in `X-Attic-Key`:
+
+| Route | Does |
+| --- | --- |
+| `GET /api/people/ping` | `{ ok, server }`, for the status check |
+| `PUT /api/people/data` | The export file as given (`app` must be `people-portfolio`, up to 25 MB), saved as `people-YYYY-MM-DD_HHMMSS.json` (`-2`, `-3` within a second). Never overwrites; the newest 30 are kept. → `{ name, savedAt }` |
+| `GET /api/people/data?name=` | The newest save, or the named one |
+| `GET /api/people/saves` | `[{ name, savedAt, size }]`, newest first |
+| `GET /api/people/folders?share=&path=` | Without `share`: the shares. With it: that folder's subfolders, and its photos as `{ name, ref: "<share>/<path>", size, modifiedAt }` |
+| `GET /api/people/photo?share=&path=&size=` | The photo, inline (image types only, `nosniff`). With `size`, a small preview |
+
+**Every key route checks:**
+- **The page's address:** the `Origin` header must be one of the listed addresses. CORS is answered for those alone, including Chrome's private-network preflight (`Access-Control-Allow-Private-Network`).
+- **The key:** compared with its stored hash. Twenty wrong keys from one address lock it out for 15 minutes.
+- **The home network:** the request must come from a private or loopback address.
+- **The usual file rules:** paths go through `safePath()` and the share checks, as the master. Nothing is written except the save files.
+
+These routes skip the same-site and pairing gates the rest of the API has, because the page isn't Attic and isn't a paired device. The key and the address list stand in for both.
+
+**Grid previews without an image library** (the open question): cameras and phones put a small thumbnail (about 160 px) inside each JPEG's EXIF data. `exifThumbnail()` finds it in the first 256 KB of the file, with core Node only. A photo without one (a PNG, a screenshot) is sent whole.
+
+`people.test.js` covers:
+- the settings and the key (shown once, hash only, a new one stops the old);
+- the key, address and CORS checks;
+- 31 saves keeping 30;
+- loading the newest and a named save;
+- folders, photos, the EXIF preview, and paths outside the share.
+
+## Reaching the HP over Wi-Fi (8 Nov 2026)
+
+- **The firewall:** installing the service (`service.js`, `installScript`) also adds Windows Firewall rules in the group "Attic Hub": TCP 8080 and 8443, and UDP 41980. They allow the **local subnet only**, on **any profile**, because Windows often calls a home Wi-Fi "Public" and rules for Private alone then do nothing. Removing the service removes them.
+- **No sleep while serving:** Attic Hub holds Windows' idle sleep off while it runs the server (`powerSaveBlocker`). Closing the lid is Windows' own setting; Server mode's screen offers to change it.
+
 ## Rules that carry over
 
 The contract is fixed: every function in `ui/js/api.js` becomes an endpoint that returns the same JSON shapes the mock returns today.

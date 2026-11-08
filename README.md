@@ -103,6 +103,27 @@ The installed tool carries the whole server (`resources\server`) and runs it wit
 - **Without internet**, the HP is the fallback: Settings → Advanced → Publish an update (master) still puts an installer on the HP for the PCs to take.
 - **The installers aren't code-signed yet**, so Windows may warn the first time one is run by hand.
 
+## Finding the HP over Wi-Fi (8 Nov 2026)
+
+A client no longer stops at "Search again". The fixes:
+- **It keeps looking by itself:** after 3, 5 and 10 seconds, then every 15 (every 30 after two minutes), and at once when the PC wakes from sleep. It connects as soon as the HP answers.
+- **Each round tries three ways at once** (`agent/connect.js`):
+  - the discovery broadcast;
+  - the HP by its PC name (e.g. `DESKTOP-UL55ECB`, and `.local`), which still works after the router gives it a new address;
+  - a knock on every address of the home network (a /24) at port 8080, asking "are you Attic?". This is plain outgoing TCP, so a Wi-Fi access point or a "Public" network's firewall can't drop it the way they drop broadcasts.
+- **On the HP:** installing the service opens the firewall to the home network only, on any network profile. While it serves, Windows doesn't put it to sleep when idle.
+- **Server mode's card** shows the HP's address (for example `192.168.1.3 (Wi-Fi)`), its address for a browser, its PC name, and a warning if closing the lid puts it to sleep, with a button to change that.
+
+Test: `desktop/scripts/wifi-connect-test.mjs`. The server starts after the client, with broadcasts off and a wrong remembered address, and the client connects by itself; a wrong address with the right PC name connects by name.
+
+## People Portfolio (Phase 5)
+
+People Portfolio (its own web page) saves its people, labels and notes to Attic, and picks photos from Attic's shared folders. This repository has Attic's half:
+- **Settings → People Portfolio** (master): the save folder, the page's address (e.g. `http://localhost:5173`), and a key, shown once.
+- **The HP's routes** (`server/people.js`, see [server/README.md](server/README.md#people-portfolio-phase-5-5-1-and-5-3)): save, load, the list of saves (newest 30 kept), the shared folders, and photos with a small preview from each JPEG's built-in thumbnail.
+
+The People Portfolio page's own screens (⋮ → Attic, Save to Attic, Load from Attic, Attic photos) belong to People Portfolio's project.
+
 ## The iPhone (Phase 4)
 
 The iPhone uses the same interface in Safari, served by the HP (4-1):
