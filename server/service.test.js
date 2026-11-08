@@ -156,3 +156,14 @@ test('a server that keeps crashing is retried with a growing wait, not in a tigh
     assert.ok(t.state().restarts <= 4, 'about 1 + 2 + 5 s: no more than a few tries');
   } finally { await t.cleanup([sup]); }
 });
+
+// Wi-Fi fix (8 Nov 2026): installing also opens the firewall, to this PC's own network only.
+test('the install opens TCP 8080/8443 and UDP 41980 to the local subnet only, on any profile, without duplicates', () => {
+  const { installScript, firewallScript, firewallRemoveScript } = require('./service/service.js');
+  const s = installScript({ node: 'C:\A\Attic Hub.exe', supervisor: 'C:\A\s.js', workDir: 'C:\A', user: 'PC\me', httpPort: 8080 });
+  assert.match(s, /New-NetFirewallRule .*-Protocol TCP -LocalPort 8080,8443 -RemoteAddress LocalSubnet -Action Allow -Profile Any/);
+  assert.match(s, /New-NetFirewallRule .*-Protocol UDP -LocalPort 41980 -RemoteAddress LocalSubnet -Action Allow -Profile Any/);
+  assert.ok(s.indexOf('Remove-NetFirewallRule') < s.indexOf('New-NetFirewallRule'), 'old rules are removed first');
+  assert.match(firewallScript({ httpPort: 9090 }), /-LocalPort 9090,8443/);
+  assert.match(firewallRemoveScript(), /-Group 'Attic Hub'.*Remove-NetFirewallRule/);
+});

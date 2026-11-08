@@ -109,6 +109,20 @@
           <div class="ctl"><a class="btn btn-secondary btn-sm" href="#/dashboard">Open device list${U.icon('chevronRight')}</a></div></div>
       </section>
 
+      <section class="card" aria-labelledby="h-pp" id="pp-card">
+        <h2 id="h-pp">People Portfolio <span class="scope">Master</span></h2>
+        <p class="muted" style="font-size:13px;margin:0 0 6px">People Portfolio saves its people, labels and notes here, and picks photos from the shared folders. Its photos aren’t moved or copied.</p>
+        <div class="set-row"><div class="lbl">Save folder<small>A folder inside a shared folder. Each save is a new dated file; the newest 30 are kept.</small></div>
+          <div class="ctl"><select class="plain-select" id="pp-share" aria-label="Shared folder"></select><input class="plain-input" id="pp-path" placeholder="Folder, e.g. Backups/People" style="width:220px" autocapitalize="none" spellcheck="false">
+            <button class="btn btn-secondary btn-sm" id="pp-save-folder">Save</button></div></div>
+        <div class="set-row"><div class="lbl"><label for="pp-origins">People Portfolio’s address</label><small>The page’s address, one per line, for example http://localhost:5173. Only these pages may use the key.</small></div>
+          <div class="ctl" style="align-items:flex-start"><textarea class="plain-input" id="pp-origins" rows="2" style="width:280px;height:auto;padding:8px 12px" spellcheck="false" autocapitalize="none"></textarea>
+            <button class="btn btn-secondary btn-sm" id="pp-save-origins">Save</button></div></div>
+        <div class="set-row"><div class="lbl">Key<small id="pp-key-state">Checking…</small></div>
+          <div class="ctl"><button class="btn btn-primary btn-sm" id="pp-key">Make a key</button></div></div>
+        <div class="set-row" style="display:block"><div class="lbl">In People Portfolio<small id="pp-howto">Open ⋮ → Attic, enter <b class="mono" id="pp-address"></b>, and paste the key. Chrome on each PC must trust the HP once: <a href="/api/tls/ca.cer" download>download the HP’s certificate</a>, open it, and install it under “Trusted Root Certification Authorities”.</small></div></div>
+      </section>
+
       <section class="card" aria-labelledby="h-adv">
         <h2 id="h-adv">Advanced <span class="scope">Master</span></h2>
         <div class="set-row" id="mail-row"><div class="lbl">Email for password resets<small id="mail-state">Checking…</small></div>
@@ -367,6 +381,45 @@
     }
 
     if (master) {
+      // Phase 5, 5-1: People Portfolio's save folder, its page addresses, and its key.
+      const pp = { share: main.querySelector('#pp-share'), path: main.querySelector('#pp-path'), origins: main.querySelector('#pp-origins'), keyState: main.querySelector('#pp-key-state') };
+      const secure = location.protocol === 'https:' ? location.host : null;
+      api.getTls().then(t => { const el = main.querySelector('#pp-address'); if (el) el.textContent = secure ? `https://${secure}` : `https://${location.hostname}:${(t && t.httpsPort) || 8443}`; });
+      const showPP = s => {
+        if (!s || !pp.share.isConnected) return;
+        if (s.folder) { pp.share.value = s.folder.shareId; pp.path.value = s.folder.path; }
+        pp.origins.value = (s.origins || []).join('\n');
+        pp.keyState.textContent = s.hasKey ? `A key is set (made ${U.absDate(s.keyCreatedAt, true)}). Making a new one stops the old one.` : 'No key yet. Make one, then paste it into People Portfolio.';
+        main.querySelector('#pp-key').textContent = s.hasKey ? 'Make a new key' : 'Make a key';
+        main.querySelector('#pp-card').dataset.loaded = '1';
+      };
+      Promise.all([api.listShares(), api.getPeopleSettings()]).then(([shares, s]) => {
+        pp.share.innerHTML = shares.map(x => `<option value="${U.esc(x.id)}">${U.esc(x.name)}</option>`).join('');
+        showPP(s);
+      }).catch(e => { pp.keyState.textContent = e.message; });
+      main.querySelector('#pp-save-folder').onclick = async () => {
+        try { showPP(await api.setPeopleSettings({ folder: { shareId: pp.share.value, path: pp.path.value.trim() } })); ui.toast('Save folder set'); }
+        catch (e) { ui.toast(e.code === 'NOT_FOUND' ? 'That folder doesn’t exist in this shared folder. Create it in Files first.' : e.message, 'error'); }
+      };
+      main.querySelector('#pp-save-origins').onclick = async () => {
+        try { showPP(await api.setPeopleSettings({ origins: pp.origins.value.split(/\s+/).filter(Boolean) })); ui.toast('Address saved'); }
+        catch (e) { ui.toast(e.message, 'error'); }
+      };
+      main.querySelector('#pp-key').onclick = async () => {
+        const had = pp.keyState.textContent.startsWith('A key is set');
+        if (had && !(await ui.confirm({ title: 'Make a new key?', confirm: 'Make a new key', lead: 'The old key stops working at once. Paste the new one into People Portfolio afterwards.' }))) return;
+        try {
+          const r = await api.newPeopleKey();
+          ui.dialog({ title: 'People Portfolio’s key', lead: 'Copy it now and paste it into People Portfolio (⋮ → Attic). It isn’t shown again.',
+            body: `<input class="plain-input mono" id="pp-key-value" readonly value="${U.esc(r.key)}" style="width:100%">`,
+            actions: [
+              { label: 'Close', kind: 'secondary' },
+              { label: 'Copy', kind: 'primary', onClick: async (close, dlg) => { const i = dlg.querySelector('#pp-key-value'); i.select(); try { await navigator.clipboard.writeText(i.value); ui.toast('Key copied'); } catch (e) { document.execCommand('copy'); } } }
+            ] });
+          showPP(await api.getPeopleSettings());
+        } catch (e) { ui.toast(e.message, 'error'); }
+      };
+
       // Phase 3, 3-5: publish an installer to the HP; the HP offers it to every device.
       const kept = main.querySelector('#upd-kept'), keptRow = main.querySelector('#upd-kept-row');
       const drawKept = async () => {

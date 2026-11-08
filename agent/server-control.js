@@ -114,7 +114,8 @@ function createControl({ paths, service, exe, supervisor, workDir, nodeEnv = {},
     async remove() {
       await api.stop();
       if (!(await taskInfo())) return;
-      await runElevated(`Unregister-ScheduledTask -TaskName ${psq(TASK)} -Confirm:$false`);
+      // The firewall rules the install added (Wi-Fi fix) go with it.
+      await runElevated(`Unregister-ScheduledTask -TaskName ${psq(TASK)} -Confirm:$false` + (service.firewallRemoveScript ? '\n' + service.firewallRemoveScript() : ''));
     },
 
     async start() {

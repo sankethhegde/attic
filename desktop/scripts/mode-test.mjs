@@ -106,6 +106,11 @@ try {
   const up = await waitFor(`document.querySelector('.srv-rows') && /Answering as/.test(document.querySelector('.srv-rows').textContent) && document.querySelector('.srv-rows').textContent.replace(/\\s+/g, ' ').trim()`, 30000);
   const h = await hello();
   check('Start now runs the server under the supervisor, without installing anything', up && h && h.app === 'Attic' && /until Attic Hub closes/.test(up), up);
+  // 8 Nov 2026: the card shows this PC's address on the home network, as the other devices use it.
+  const lanIps = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal && !i.address.startsWith('169.254.')).map(i => i.address);
+  const shownIp = await waitFor(`[...document.querySelectorAll('[data-ip]')].map(e => e.textContent).join(',')`, 5000);
+  const addrRow = await waitFor(`[...document.querySelectorAll('.srv-row')].map(r => r.textContent.replace(/\\s+/g, ' ').trim()).find(t => t.startsWith('Address'))`, 5000);
+  check('the server card shows this PC’s address (like 192.168.1.3), Wi-Fi or Ethernet, and the browser address', shownIp && lanIps.includes(shownIp.split(',')[0]) && /http:\/\/\d+\.\d+\.\d+\.\d+:\d+/.test(addrRow || ''), addrRow);
   const logs = fs.existsSync(path.join(serverProfile, 'server', 'data', 'logs')) && fs.readdirSync(path.join(serverProfile, 'server', 'data', 'logs')).length;
   check('the supervisor writes its log in the server’s data folder', logs, logs ? 'data\\logs' : 'no logs');
 

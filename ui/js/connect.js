@@ -50,6 +50,8 @@
 
   const serverLine = s => `<span class="mono">${U.esc(s.address)}:${s.port}</span>`;
   const spinner = text => `<div class="connect-progress"><span class="spinner" aria-hidden="true"></span><span>${text}</span></div>`;
+  const spinnerIcon = () => '<span class="spinner" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px"></span>';
+  let countdown = 0;
 
   // Phase 3, 3-1 (T-02): the first launch asks what this PC is. One installer serves every PC.
   function modeHTML(s) {
@@ -73,7 +75,10 @@
     } else if (s.state === 'searching') {
       html = `<h1 id="c-title">${s.lost ? `Reconnecting to ${U.esc(s.lost.name)}` : 'Looking for your Attic server'}</h1>
         <p class="sub">${s.lost ? 'The connection dropped. Looking for it on your home network again.' : 'Searching your home network. This takes a few seconds.'}</p>
-        ${spinner(s.step === 'remembered' && s.server ? `Trying ${U.esc(s.server.name || 'the last server')} at ${serverLine(s.server)}…` : 'Asking the network for the HP…')}`;
+        ${spinner(s.step === 'remembered' && s.server ? `Trying ${U.esc(s.server.name || 'the last server')} at ${serverLine(s.server)}…`
+          : s.step === 'name' ? `Looking for ${U.esc(s.name)} by name…`
+          : s.step === 'sweep' ? 'Checking each address on your network…'
+          : 'Asking the network for the HP…')}${s.attempt > 1 ? `<p class="connect-hint">Try ${s.attempt}. Attic Hub keeps looking by itself.</p>` : ''}`;
     } else if (s.state === 'checking') {
       html = `<h1 id="c-title">Checking ${U.esc(s.address)}</h1><p class="sub">Making sure it’s an Attic server.</p>${spinner('Connecting…')}`;
     } else if (s.state === 'connected') {
@@ -95,7 +100,8 @@
           ${heard}
         </ul>
         ${s.error ? `<p class="connect-hint">Search error: ${U.esc(s.error)}</p>` : ''}
-        <button type="button" class="btn btn-primary btn-block" id="c-retry">${U.icon('refresh')}Search again</button>`;
+        ${s.retryIn ? `<p class="connect-hint" id="c-auto">${spinnerIcon()} Still looking: Attic Hub tries again by itself in <b id="c-auto-s">${Math.ceil(s.retryIn / 1000)}</b> s, and connects as soon as the HP answers.</p>` : ''}
+        <button type="button" class="btn btn-primary btn-block" id="c-retry">${U.icon('refresh')}Search now</button>`;
     } else if (s.state === 'typed-error') {
       html = `<h1 id="c-title">Couldn’t connect</h1><p class="sub">Check the address, or search the network again.</p>
         <button type="button" class="btn btn-primary btn-block" id="c-retry">${U.icon('refresh')}Search again</button>`;
@@ -103,6 +109,12 @@
       addr.focus();
     }
     stateEl.innerHTML = html;
+    // The automatic retry's countdown (Wi-Fi fix): the main process searches again by itself.
+    clearInterval(countdown);
+    if (s.retryIn) {
+      let left = Math.ceil(s.retryIn / 1000);
+      countdown = setInterval(() => { const el = stateEl.querySelector('#c-auto-s'); if (!el || --left < 0) return clearInterval(countdown); el.textContent = left; }, 1000);
+    }
     const retry = stateEl.querySelector('#c-retry');
     if (retry) retry.onclick = () => { setError(''); hub.retry(); };
     stateEl.querySelectorAll('[data-id]').forEach(b => b.onclick = () => hub.choose(b.dataset.id));

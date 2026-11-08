@@ -60,7 +60,8 @@ contextBridge.exposeInMainWorld('atticDesktop', {
     forget: () => ipcRenderer.invoke('server:forget'),
     action: name => ipcRenderer.invoke('server:action', String(name)),
     open: () => ipcRenderer.invoke('server:open'),
-    controls: () => ipcRenderer.send('server:controls')
+    controls: () => ipcRenderer.send('server:controls'),
+    lidStayAwake: () => ipcRenderer.invoke('server:lidStayAwake')
   },
   // This PC's own preferences (3-2): start with Windows, and notifications for received files.
   prefs: {

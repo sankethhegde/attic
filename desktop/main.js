@@ -58,6 +58,9 @@ if (SUPERVISOR_ARG) {
     });
     sup.on('exit', code => app.exit(code == null ? 1 : code));
     sup.on('error', () => app.exit(1));
+    // A server that falls asleep can't be reached (Wi-Fi fix, 8 Nov 2026): while it runs, Windows doesn't
+    // put the HP to sleep when idle. Closing the lid is Windows' own setting (Server mode says so).
+    app.whenReady().then(() => { try { require('electron').powerSaveBlocker.start('prevent-app-suspension'); } catch (e) { /* not available */ } });
   }
 }
 const connect = require(path.join(ROOT, 'agent', 'connect.js'));
@@ -189,6 +192,8 @@ if (SUPERVISOR_ARG) {
     }, 5000).unref();
     start();
     resumeAfterUpdate();
+    // Waking from sleep: look for the HP at once rather than at the next scheduled try.
+    require('electron').powerMonitor.on('resume', () => { if (!server && mode && mode.mode === 'client' && onStartScreen() && !searching) startSearch({ auto: true }); });
   });
   // "Start now" runs the server as a child of the tool; it stops with the tool.
   app.on('before-quit', () => { quitting = true; if (control) control.stopChild(); installOnQuit(); });
@@ -266,16 +271,25 @@ function showStartScreen() {
 
 // mode: 'start' (normal), 'lost' (the open server stopped answering), 'change' (the user asked to pick
 // another server, so nothing connects on its own).
-async function startSearch({ mode = 'start', lost = null } = {}) {
+// Wi-Fi fix (8 Nov 2026): nothing found is no longer the end. The tool searches again by itself (after 3,
+// 5, 10, then every 15 s; every 30 s after two minutes) until the HP answers, so a server still starting
+// up, or a broadcast lost on Wi-Fi, needs no "Search again". Waking from sleep searches at once.
+const AUTO_RETRY_MS = [3e3, 5e3, 10e3, 15e3];
+let autoRetry = 0, attempt = 0, autoStartedAt = 0;
+function stopAutoRetry() { clearTimeout(autoRetry); autoRetry = 0; }
+async function startSearch({ mode = 'start', lost = null, auto = false } = {}) {
   if (searching || !win) return;
+  stopAutoRetry();
+  if (!auto) { attempt = 0; autoStartedAt = Date.now(); }
+  attempt++;
   searching = true;
   stopAgent();
   showStartScreen();
   const from = mode === 'change' ? null : remembered;
-  sendState({ state: 'searching', step: from ? 'remembered' : 'broadcast', server: from, lost });
+  sendState({ state: 'searching', step: from ? 'remembered' : 'broadcast', server: from, lost, attempt });
   let r;
   try {
-    r = await connect.search({ remembered: from, onProgress: p => sendState(Object.assign({ state: 'searching', lost }, p)) });
+    r = await connect.search({ remembered: from, onProgress: p => sendState(Object.assign({ state: 'searching', lost, attempt }, p)) });
   } catch (e) {
     r = { state: 'not-found', heard: 0, error: e.message };
   }
@@ -287,10 +301,18 @@ async function startSearch({ mode = 'start', lost = null } = {}) {
     choices = list;
     return sendState({ state: 'choose', servers: list, rememberedId: remembered && remembered.serverId });
   }
-  sendState(Object.assign({}, r, { lost }));
+  // Not found: try again by itself, unless the user is picking another server by hand.
+  let retryIn = 0;
+  if (mode !== 'change') {
+    retryIn = Date.now() - autoStartedAt > 120e3 ? 30e3 : AUTO_RETRY_MS[Math.min(attempt - 1, AUTO_RETRY_MS.length - 1)];
+    if (process.env.ATTIC_AUTO_RETRY_MS) retryIn = +process.env.ATTIC_AUTO_RETRY_MS; // tests
+    autoRetry = setTimeout(() => { if (!server && !searching && onStartScreen()) startSearch({ mode, lost, auto: true }); }, retryIn);
+  }
+  sendState(Object.assign({}, r, { lost, retryIn, attempt }));
 }
 
 function useServer(s) {
+  stopAutoRetry();
   remembered = saved.save(s);
   server = s;
   sendState({ state: 'connected', server: s });
@@ -376,6 +398,7 @@ ipcMain.on('hub:choose', async (e, id) => {
   if (!trusted(e)) return;
   const pick = choices.find(s => s.serverId === id);
   if (!pick) return;
+  stopAutoRetry();
   sendState({ state: 'checking', address: pick.address });
   try { useServer(await connect.hello(pick)); }
   catch (err) { sendState({ state: 'typed-error', message: err.message, address: pick.address }); }
@@ -385,6 +408,7 @@ ipcMain.on('hub:connectTo', async (e, text) => {
   let target;
   try { target = connect.normalizeAddress(text); }
   catch (err) { return sendState({ state: 'typed-error', message: err.message, address: String(text || '') }); }
+  stopAutoRetry();
   sendState({ state: 'checking', address: target.address });
   try { useServer(await connect.hello(target)); }
   catch (err) { sendState({ state: 'typed-error', message: err.message, address: String(text) }); }
@@ -431,15 +455,58 @@ if (TEST_HOOKS) {
   ipcMain.handle('test:pace', () => ({ statsMs: statsPace(3000), slowMs: low.active ? LOW_SLOW_MS : 30e3, watcherPid: watcher ? watcher.pid : null }));
 }
 
+// This PC on the network, for Server mode's card (8 Nov 2026): its home-network addresses (Wi-Fi or
+// Ethernet), its PC name, and whether closing the lid puts it to sleep (Windows' own setting).
+function networkInfo() {
+  const addresses = [];
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    for (const a of list || []) {
+      if (a.family !== 'IPv4' || a.internal || a.address.startsWith('169.254.')) continue;
+      addresses.push({ address: a.address, via: /wi-?fi|wlan|wireless/i.test(name) ? 'Wi-Fi' : /ethernet|^eth/i.test(name) ? 'Ethernet' : name });
+    }
+  }
+  // Ethernet first: the steadier one to give the other devices.
+  addresses.sort((x, y) => (x.via === 'Ethernet' ? 0 : 1) - (y.via === 'Ethernet' ? 0 : 1));
+  return { addresses, hostname: HOSTNAME };
+}
+let lidCache = { at: 0, sleeps: null };
+function lidSleeps() {
+  if (process.platform !== 'win32' || Date.now() - lidCache.at < 60e3) return Promise.resolve(lidCache.sleeps);
+  return new Promise(resolve => require('child_process').execFile('powercfg', ['/q', 'SCHEME_CURRENT', 'SUB_BUTTONS', 'LIDACTION'], { windowsHide: true, timeout: 5000 }, (err, out) => {
+    const m = /Current AC Power Setting Index:\s*0x([0-9a-f]+)/i.exec(out || '');
+    lidCache = { at: Date.now(), sleeps: m ? parseInt(m[1], 16) !== 0 : null }; // 0 = do nothing
+    resolve(lidCache.sleeps);
+  }));
+}
+let awakeBlocker = null; // no idle sleep while this PC's server runs
+function keepAwake(on) {
+  const { powerSaveBlocker } = require('electron');
+  if (on && awakeBlocker === null) awakeBlocker = powerSaveBlocker.start('prevent-app-suspension');
+  else if (!on && awakeBlocker !== null) { powerSaveBlocker.stop(awakeBlocker); awakeBlocker = null; }
+}
 ipcMain.handle('server:state', async e => {
   if (!trusted(e)) return null;
   const c = getControl();
   const drives = ['D', 'E', 'C'].filter(d => fs.existsSync(d + ':\\'));
+  const status = c ? await c.status() : null;
+  keepAwake(!!(status && status.server));
   return {
     configured: !!c, paths: mode && mode.server, newDir: NEW_SERVER_DIR, installable: app.isPackaged,
     suggestedStorage: `${drives[0] || 'C'}:\\Attic`,
-    status: c ? await c.status() : null, logs: c ? c.logs(30) : []
+    status, logs: c ? c.logs(30) : [],
+    network: Object.assign(networkInfo(), { lidSleeps: await lidSleeps() })
   };
+});
+// "Keep running with the lid closed": Windows' own setting, for when plugged in only.
+ipcMain.handle('server:lidStayAwake', async e => {
+  if (!trusted(e)) return null;
+  const run = args => new Promise((resolve, reject) => require('child_process').execFile('powercfg', args, { windowsHide: true, timeout: 10000 }, err => err ? reject(err) : resolve()));
+  try {
+    await run(['/setacvalueindex', 'SCHEME_CURRENT', 'SUB_BUTTONS', 'LIDACTION', '0']);
+    await run(['/setactive', 'SCHEME_CURRENT']);
+    lidCache.at = 0;
+    return { ok: true };
+  } catch (err) { return { error: 'Windows didn’t accept it: ' + err.message + ' Set it in Control Panel → Power Options → Choose what closing the lid does.' }; }
 });
 ipcMain.handle('server:pickFolder', async (e, title) => {
   if (!trusted(e)) return null;

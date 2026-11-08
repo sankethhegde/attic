@@ -467,6 +467,13 @@
       return acc;
     },
 
+    // ---------- People Portfolio (Phase 5, 5-1; master) ----------
+    // { folder: { shareId, path } | null, origins: [...], hasKey, keyCreatedAt }
+    getPeopleSettings() { return http('GET', '/api/people/settings'); },
+    setPeopleSettings(patch) { return http('PUT', '/api/people/settings', patch); },
+    // A new key, returned once; the old one stops working. → { key, keyCreatedAt }
+    newPeopleKey() { return http('POST', '/api/people/key', {}); },
+
     // ---------- feedback round 1: emails, forgotten passwords, sign-up (the HP's: PR #28) ----------
     // An account's email address, where password-reset links go ('' removes it).
     async updateEmail(id, email) {

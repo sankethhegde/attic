@@ -39,8 +39,21 @@ function runPs(script) {
 
 const isAdmin = () => runPs('([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)') === 'True';
 
+// Windows Firewall (Wi-Fi fix, 8 Nov 2026): the other devices reach the server through these ports. The rules
+// allow them from this PC's own network only (LocalSubnet), on any profile: Windows often calls a home Wi-Fi
+// "Public", and rules for Private alone then do nothing. Replaced each time, never added twice.
+const FIREWALL_GROUP = 'Attic Hub';
+function firewallScript({ httpPort = 8080, httpsPort = 8443, discoveryPort = 41980 } = {}) {
+  return [
+    `Get-NetFirewallRule -Group ${psq(FIREWALL_GROUP)} -ErrorAction SilentlyContinue | Remove-NetFirewallRule`,
+    `New-NetFirewallRule -DisplayName ${psq(`Attic Hub (TCP ${httpPort}, ${httpsPort})`)} -Group ${psq(FIREWALL_GROUP)} -Direction Inbound -Protocol TCP -LocalPort ${httpPort},${httpsPort} -RemoteAddress LocalSubnet -Action Allow -Profile Any | Out-Null`,
+    `New-NetFirewallRule -DisplayName ${psq(`Attic Hub discovery (UDP ${discoveryPort})`)} -Group ${psq(FIREWALL_GROUP)} -Direction Inbound -Protocol UDP -LocalPort ${discoveryPort} -RemoteAddress LocalSubnet -Action Allow -Profile Any | Out-Null`
+  ].join('\n');
+}
+const firewallRemoveScript = () => `Get-NetFirewallRule -Group ${psq(FIREWALL_GROUP)} -ErrorAction SilentlyContinue | Remove-NetFirewallRule`;
+
 // The task, as PowerShell. Kept a pure function so the tests can read exactly what gets registered.
-function installScript({ task = TASK, node = process.execPath, supervisor = SUPERVISOR, workDir = SERVER_DIR, user = `${process.env.USERDOMAIN || os.hostname()}\\${os.userInfo().username}` } = {}) {
+function installScript({ task = TASK, node = process.execPath, supervisor = SUPERVISOR, workDir = SERVER_DIR, user = `${process.env.USERDOMAIN || os.hostname()}\\${os.userInfo().username}`, httpPort = configuredPort() } = {}) {
   return [
     "$ErrorActionPreference = 'Stop'",
     `$action = New-ScheduledTaskAction -Execute ${psq(node)} -Argument ${psq(`"${supervisor}"`)} -WorkingDirectory ${psq(workDir)}`,
@@ -49,7 +62,8 @@ function installScript({ task = TASK, node = process.execPath, supervisor = SUPE
     '$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -DontStopOnIdleEnd -StartWhenAvailable ' +
       '-ExecutionTimeLimit (New-TimeSpan -Seconds 0) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew',
     `Register-ScheduledTask -TaskName ${psq(task)} -Description ${psq('Attic Hub: the HP server, started with Windows before anyone signs in, restarted after a crash.')} ` +
-      '-Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null'
+      '-Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null',
+    firewallScript({ httpPort })
   ].join('\n');
 }
 
@@ -189,4 +203,4 @@ async function main() {
 
 if (require.main === module) main().catch(e => { console.error(e.stderr ? String(e.stderr).trim() : e.message); process.exitCode = 1; });
 
-module.exports = { installScript, taskInfo, status, isAdmin, TASK };
+module.exports = { installScript, firewallScript, firewallRemoveScript, taskInfo, status, isAdmin, TASK, FIREWALL_GROUP };
