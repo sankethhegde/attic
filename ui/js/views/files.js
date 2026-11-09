@@ -148,6 +148,7 @@
         <h1 id="ftitle"></h1><span class="muted" id="fcount"></span><span class="grow"></span>
         <div class="toolbar">
           <button class="btn btn-secondary btn-sm" id="fupload">${U.icon('upload')}<span>Upload</span></button><input type="file" id="fpick" multiple hidden>
+          <button class="btn btn-secondary btn-sm desktop-only" id="fupdir">${U.icon('folder')}<span>Upload folder</span></button><input type="file" id="fpickdir" webkitdirectory multiple hidden>
           ${master ? '<label class="sr-only" for="fowner">Owner</label><select class="plain-select" id="fowner"><option value="">All owners</option></select>' : ''}
           <div class="seg" role="group" aria-label="View">
             <button data-view="list" aria-pressed="${ts.view === 'list'}">${U.icon('list')}<span>List</span></button>
@@ -202,8 +203,33 @@
     main.querySelector('#fback').onclick = () => ctx.go(up === null ? drivesHash(driveOf(share)) : folderHash(shareId, up));
 
     // Upload into this folder. The uploader owns what it uploads; progress shows on the button.
+    // Upload folder (9 Nov 2026) sends a whole folder, with its folders inside, into this one.
     const upBtn = main.querySelector('#fupload'), pick = main.querySelector('#fpick');
+    const dirBtn = main.querySelector('#fupdir'), pickDir = main.querySelector('#fpickdir');
     upBtn.onclick = () => pick.click();
+    dirBtn.onclick = () => pickDir.click();
+    // Three at a time (feedback 1): a batch of photos from a phone shares the Wi-Fi better, and Safari copes.
+    const pool = (list, n, fn) => { const out = new Array(list.length); let next = 0; const worker = async () => { while (next < list.length) { const i = next++; try { out[i] = { status: 'fulfilled', value: await fn(list[i]) }; } catch (reason) { out[i] = { status: 'rejected', reason }; } } }; return Promise.all(Array.from({ length: Math.min(n, list.length) }, worker)).then(() => out); };
+    const refresh = async () => {
+      try { data.items = (await api.listFolder(shareId, path)).items; const st = main.scrollTop; draw(); main.scrollTop = st; }
+      catch (e) { /* the list stays as it was */ }
+    };
+    // jobs: [{ file, folder }]. Returns the settled results, in order.
+    async function sendAll(jobs, btn, idle) {
+      const total = jobs.reduce((n, j) => n + j.file.size, 0), done = new Map();
+      const label = btn.querySelector('span');
+      // 4-2: big files go in pieces and carry on after a drop; meanwhile the button says it's waiting.
+      const paused = new Set();
+      const results = await pool(jobs, 3, j => api.upload(shareId, j.folder, j.file, (p, st) => {
+        done.set(j, p * j.file.size);
+        if (st && st.paused) paused.add(j); else paused.delete(j);
+        label.textContent = paused.size ? 'Waiting…' : Math.floor([...done.values()].reduce((a, b) => a + b, 0) / (total || 1) * 100) + '%';
+      }).promise);
+      label.textContent = idle;
+      return results;
+    }
+    const busy = on => { upBtn.disabled = on; dirBtn.disabled = on; };
+
     pick.onchange = async () => {
       const list = [...pick.files];
       pick.value = '';
@@ -211,25 +237,53 @@
       bad.forEach(([f, err]) => ui.toast(`${f.name}: ${err}`, 'error'));
       const good = list.filter(f => !api.validateUpload(f));
       if (!good.length) return;
-      const total = good.reduce((n, f) => n + f.size, 0), done = new Map();
-      const label = upBtn.querySelector('span');
-      upBtn.disabled = true;
-      // 4-2: big files go in pieces and carry on after a drop; meanwhile the button says it's waiting.
-      const paused = new Set();
-      // Three at a time (feedback 1): a batch of photos from a phone shares the Wi-Fi better, and Safari copes.
-      const pool = (list, n, fn) => { const out = new Array(list.length); let next = 0; const worker = async () => { while (next < list.length) { const i = next++; try { out[i] = { status: 'fulfilled', value: await fn(list[i]) }; } catch (reason) { out[i] = { status: 'rejected', reason }; } } }; return Promise.all(Array.from({ length: Math.min(n, list.length) }, worker)).then(() => out); };
-      const results = await pool(good, 3, f => api.upload(shareId, path, f, (p, st) => {
-        done.set(f, p * f.size);
-        if (st && st.paused) paused.add(f); else paused.delete(f);
-        label.textContent = paused.size ? 'Waiting…' : Math.floor([...done.values()].reduce((a, b) => a + b, 0) / total * 100) + '%';
-      }).promise);
-      upBtn.disabled = false;
-      label.textContent = 'Upload';
+      busy(true);
+      const results = await sendAll(good.map(file => ({ file, folder: path })), upBtn, 'Upload');
+      busy(false);
       const ok = results.filter(r => r.status === 'fulfilled').length;
       results.forEach((r, i) => { if (r.status === 'rejected') ui.toast(`${good[i].name}: ${r.reason.message}`, 'error'); });
       if (ok) ui.toast(ok === 1 ? `${results.find(r => r.status === 'fulfilled').value.name} uploaded` : `${ok} files uploaded`);
-      try { data.items = (await api.listFolder(shareId, path)).items; const st = main.scrollTop; draw(); main.scrollTop = st; }
-      catch (e) { /* the list stays as it was */ }
+      refresh();
+    };
+
+    pickDir.onchange = async () => {
+      const list = [...pickDir.files];
+      pickDir.value = '';
+      const relOf = f => (f.webkitRelativePath || f.name).replace(/\\/g, '/');
+      // Windows' and macOS's own housekeeping files aren't worth a copy.
+      const junk = f => /^(desktop\.ini|thumbs\.db|\.ds_store)$/i.test(f.name);
+      const files = list.filter(f => !junk(f));
+      if (!files.length) return ui.toast('Nothing to upload: that folder has no files in it.', 'error');
+      const top = relOf(files[0]).split('/')[0];
+      const skipped = files.filter(f => api.validateUpload(f));
+      const good = files.filter(f => !api.validateUpload(f));
+      const label = dirBtn.querySelector('span');
+      busy(true);
+      // The folders first, top down. Each one's real path comes back ("Trip (1)" if "Trip" is someone
+      // else's), and what's inside goes under that.
+      const dirs = new Set();
+      for (const f of good) { const parts = relOf(f).split('/').slice(0, -1); for (let i = 1; i <= parts.length; i++) dirs.add(parts.slice(0, i).join('/')); }
+      const where = new Map([['', path]]);
+      label.textContent = 'Folders…';
+      try {
+        for (const d of [...dirs].sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b))) {
+          const i = d.lastIndexOf('/');
+          where.set(d, await api.makeFolder(shareId, where.get(i < 0 ? '' : d.slice(0, i)), d.slice(i + 1)));
+        }
+      } catch (e) {
+        busy(false); label.textContent = 'Upload folder';
+        ui.toast(`${top}: ${e.message}`, 'error');
+        return refresh();
+      }
+      const jobs = good.map(file => { const r = relOf(file); return { file, folder: where.get(r.slice(0, r.lastIndexOf('/'))) }; });
+      const results = jobs.length ? await sendAll(jobs, dirBtn, 'Upload folder') : [];
+      busy(false); label.textContent = 'Upload folder';
+      const failed = results.map((r, i) => [r, jobs[i]]).filter(([r]) => r.status === 'rejected');
+      failed.slice(0, 3).forEach(([r, j]) => ui.toast(`${relOf(j.file)}: ${r.reason.message}`, 'error'));
+      const ok = results.length - failed.length, landed = (where.get(top) || top).split('/').pop();
+      const notes = [failed.length && `${failed.length} failed`, skipped.length && `${skipped.length} skipped (empty or not allowed)`].filter(Boolean).join(', ');
+      ui.toast(`“${landed}” uploaded: ${ok} ${ok === 1 ? 'file' : 'files'}${notes ? ' · ' + notes : ''}`, failed.length || !ok ? 'error' : undefined);
+      refresh();
     };
 
     let selected = data.items.find(i => i.id === selectId) || null;

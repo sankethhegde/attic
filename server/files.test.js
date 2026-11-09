@@ -160,3 +160,28 @@ test('a 2 GB file downloads completely, and resumes from the middle', { timeout:
   assert.strictEqual(tail.headers.get('content-range'), `bytes ${GB2 - 10}-${GB2 - 1}/${GB2}`);
   assert.strictEqual((await tail.arrayBuffer()).byteLength, 10);
 });
+
+test('new folders for a folder upload: made, reused when the caller can see them, renamed when not', async () => {
+  const mk = (who, parent, name) => who('POST', folder(parent), { name }).then(json);
+  // A fresh folder, then one inside it.
+  const a = await mk(master, '', 'Album');
+  assert.deepStrictEqual(a, { status: 201, body: { path: 'Album' } });
+  const b = await mk(master, 'Album', 'Day 1');
+  assert.deepStrictEqual(b.body, { path: 'Album/Day 1' });
+  assert.ok(fs.statSync(path.join(share, 'Album', 'Day 1')).isDirectory());
+  // The same name again from the master: the existing folder is used, not "Album (1)".
+  assert.deepStrictEqual((await mk(master, '', 'Album')).body, { path: 'Album' });
+  // A device can't see the master's "Trip 2026", so it gets its own, under a free name.
+  const d = await mk(device, '', 'Trip 2026');
+  assert.deepStrictEqual(d, { status: 201, body: { path: 'Trip 2026 (1)' } });
+  assert.ok(fs.existsSync(path.join(share, 'Trip 2026', 'Goa', 'beach.jpg')), 'the master’s folder is untouched');
+  // Bad names, a missing parent, a junction, and nobody signed in are all refused.
+  for (const name of ['', '..', 'a/b', 'a\b', 'CON', 'bad:name']) assert.strictEqual((await mk(master, '', name)).status, 400, `name ${JSON.stringify(name)}`);
+  assert.strictEqual((await mk(master, 'No such folder', 'x')).status, 404);
+  assert.strictEqual((await mk(master, 'escape', 'x')).status, 403); // the junction leads outside the share
+  assert.ok(!fs.existsSync(path.join(outside, 'x')));
+  assert.strictEqual((await client()('POST', folder(''), { name: 'x' })).status, 401);
+  // A file of that name: the folder takes the next free name.
+  fs.writeFileSync(path.join(share, 'Clash'), 'a file');
+  assert.deepStrictEqual((await mk(master, '', 'Clash')).body, { path: 'Clash (1)' });
+});
