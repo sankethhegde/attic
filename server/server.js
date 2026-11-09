@@ -596,6 +596,12 @@ async function handleApi(req, res, url, query) {
     const who = requireSession(req);
     const view = own.view(who.session);
     if (what === 'folder' && m === 'GET') return sendJSON(res, 200, await files.listFolder(shareId, rel, view));
+    // A new folder inside ?path= (uploading a whole folder): body { name }. Answers { path } it ended up at.
+    if (what === 'folder' && m === 'POST') {
+      const made = await files.makeFolder(shareId, rel, body.name, view);
+      files.forget(shareId);
+      return sendJSON(res, 201, { path: made.rel });
+    }
     if (what === 'file' && (m === 'GET' || m === 'HEAD')) return sendFile(req, res, await files.openFile(shareId, rel, view), query.get('inline') === '1');
     // Upload: ?path= is the destination folder plus the file's name. The uploader owns what it uploads.
     if (what === 'file' && m === 'PUT') {

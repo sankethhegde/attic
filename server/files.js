@@ -156,6 +156,34 @@ function createFiles(shares, safePath) {
       }
     },
 
+    // A folder inside another, for uploading a whole folder (9 Nov 2026). A folder of that name the caller
+    // can see is used as it is, so a second upload of the same folder fills it up (files are never
+    // overwritten: "photo (1).jpg"). One the caller can't see (another account's) is left alone and the
+    // new one gets a free name, "Trip (1)". Resolves with the folder's path in the share.
+    async makeFolder(shareId, parentRel, name, view) {
+      const share = shareOrThrow(shareId);
+      name = typeof name === 'string' ? name.trim() : '';
+      if (!name || name === '.' || name === '..' || /[\\/]/.test(name) || isTemp(name)) throw new FileError(400, 'INVALID', 'Give the folder a name.');
+      if (!safePath(shareId, joinRel(parentRel, name))) throw new FileError(400, 'INVALID', 'Windows can’t store a folder with that name.');
+      const parent = await folderPath(share, shareId, parentRel, view);
+      for (let n = 0; n <= 999; n++) {
+        const cand = n ? `${name} (${n})` : name;
+        const rel = joinRel(parent.rel, cand);
+        if (!safePath(shareId, rel)) throw new FileError(400, 'INVALID', 'Windows can’t store a folder with that name.');
+        const dir = path.join(parent.dir, cand);
+        try { await fs.promises.mkdir(dir); }
+        catch (e) {
+          if (e.code === 'ENOSPC') throw new FileError(507, 'DISK_FULL', `${share.name} is full.`);
+          if (e.code !== 'EEXIST') throw readError(e, 'folder');
+          const st = await fs.promises.lstat(dir).catch(() => null);
+          if (!st || !st.isDirectory()) continue; // a file (or a link) by that name: try the next name
+        }
+        try { return { rel: (await folderPath(share, shareId, rel, view)).rel }; }
+        catch (e) { if (!(e instanceof FileError) || e.status !== 404) throw e; } // there, but not the caller's
+      }
+      throw new FileError(409, 'CONFLICT', 'Couldn’t find a free name for that folder.');
+    },
+
     async saveUpload(shareId, folderRel, name, stream, view, limit) {
       const prep = await this.prepareUpload(shareId, folderRel, name, view);
       const share = { name: prep.shareName };

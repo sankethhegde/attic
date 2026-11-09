@@ -544,6 +544,15 @@
       return data;
     },
 
+    // A new folder inside `path` (uploading a whole folder). Resolves with the path it ended up at: the
+    // same name when the caller can use that folder, or "Trip (1)" when it's someone else's.
+    async makeFolder(shareId, path, name) {
+      const q = path ? '?path=' + encodeURIComponent(path) : '';
+      const r = await http('POST', `/api/shares/${encodeURIComponent(shareId)}/folder${q}`, { name });
+      forgetIndex();
+      return r.path;
+    },
+
     // A real id carries its share and path, so one folder listing finds it.
     async getFile(id) {
       let shareId, rel;
