@@ -86,6 +86,44 @@ try {
   check('its address changed but its PC name is known: it connects by name, straight away', byName && saved2.address.toLowerCase() === os.hostname().toLowerCase() && Date.now() - t1 < 15000,
     `${byName} after ${Math.round((Date.now() - t1) / 1000)} s; remembered as ${saved2.address}`);
   await quit();
+
+  // 3. A paired PC, and the HP's address changes (9 Nov 2026 bug: it asked to pair again and the HP
+  //    listed it as a new device). The pairing must follow the HP to its new address.
+  let master = '';
+  const hp = async (method, url, body) => {
+    const r = await fetch(`http://127.0.0.1:${HTTP_PORT}${url}`, { method, headers: { Cookie: master, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    const set = r.headers.getSetCookie().map(c => c.split(';')[0]).find(c => c.startsWith('attic_session='));
+    if (set) master = set;
+    return r.json().catch(() => null);
+  };
+  await hp('POST', '/api/setup', { displayName: 'Test', username: 'master', password: 'test1234' });
+  await hp('POST', '/api/session', { mode: 'master', username: 'master', password: 'test1234' });
+  // Paired while the HP was at this PC's network address.
+  fs.writeFileSync(path.join(profile, 'server.json'), JSON.stringify({ serverId: hello.serverId, name: os.hostname(), address: lan.address, port: HTTP_PORT }));
+  await launch();
+  const pairScreen = await until(() => ev(`return location.hash === '#/pair' && !!document.querySelector('#pr-code')`), 20000);
+  const code = (await hp('POST', '/api/pairing/codes', {})).code;
+  await ev(`const c = document.querySelector('#pr-code'); c.value = '${code}'; c.dispatchEvent(new Event('input')); document.querySelector('.login-card').requestSubmit(); return 1`);
+  const paired = await until(() => ev(`return location.hash === '#/login' && location.hash`), 15000);
+  const clientsBefore = (await hp('GET', '/api/devices')).filter(d => d.role === 'client').length;
+  check('set-up: the PC pairs with the HP at its first address', pairScreen && paired && clientsBefore === 1, `${paired} · ${clientsBefore} client(s) on the HP`);
+  // That first address now belongs to nobody: the pairing sits at 203.0.113.9, as if the HP moved off it.
+  const OLD = '203.0.113.9';
+  const jar = ((await send('Network.getAllCookies')).result || {}).cookies || [];
+  for (const c of jar.filter(c => /^attic_/.test(c.name) && c.domain === lan.address)) {
+    await send('Network.setCookie', { url: `http://${OLD}:${HTTP_PORT}/`, name: c.name, value: c.value, path: c.path, httpOnly: c.httpOnly, secure: c.secure, sameSite: c.sameSite, expires: c.expires > 0 ? c.expires : undefined });
+    await send('Network.deleteCookies', { name: c.name, domain: lan.address });
+  }
+  await sleep(800);
+  await quit();
+  // The HP is found again at a different address (here: by its PC name).
+  fs.writeFileSync(path.join(profile, 'server.json'), JSON.stringify({ serverId: hello.serverId, name: os.hostname(), address: OLD, port: HTTP_PORT }));
+  await launch();
+  const landed = await until(() => ev(`return location.protocol.startsWith('http') && /^#\\/(login|pair|$)/.test(location.hash || '#/') && document.querySelector('#lg-user, #pr-code') && location.host + ' ' + location.hash`), 30000);
+  const clientsAfter = (await hp('GET', '/api/devices')).filter(d => d.role === 'client').length;
+  check('the HP at a new address: still paired (sign-in, not the pairing screen), and no new device on the HP',
+    landed && /#\/login/.test(landed) && clientsAfter === 1, `${landed} · ${clientsAfter} client(s) on the HP`);
+  await quit();
 } catch (e) {
   check('the test ran to the end', false, e.stack);
 } finally {
