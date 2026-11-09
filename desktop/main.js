@@ -311,12 +311,37 @@ async function startSearch({ mode = 'start', lost = null, auto = false } = {}) {
   sendState(Object.assign({}, r, { lost, retryIn, attempt }));
 }
 
+// Cookies belong to an address, so when the HP's address changes (a new one from the router, or a
+// switch between Wi-Fi and Ethernet) this PC's pairing and sign-in would stay behind at the old one and
+// the HP would ask to pair again. The same HP (same serverId) at a new address gets them carried over.
+async function carryPairing(prev, s) {
+  if (!win || !prev || prev.serverId !== s.serverId || prev.address === s.address) return 0;
+  const jar = win.webContents.session.cookies;
+  const host = a => (a.includes(':') && !a.startsWith('[') ? `[${a}]` : a);
+  const have = await jar.get({ url: connect.urlFor(s) }).catch(() => []);
+  if (have.some(c => c.name === 'attic_device')) return 0; // already paired at this address
+  const old = await jar.get({ url: connect.urlFor(prev) }).catch(() => []);
+  let n = 0;
+  for (const c of old) {
+    if (!/^attic_/.test(c.name)) continue;
+    const details = { url: `${c.secure ? 'https' : 'http'}://${host(s.address)}${c.path || '/'}`, name: c.name, value: c.value,
+      path: c.path || '/', secure: !!c.secure, httpOnly: !!c.httpOnly, sameSite: c.sameSite === 'unspecified' ? undefined : c.sameSite };
+    if (!c.session && c.expirationDate) details.expirationDate = c.expirationDate;
+    try { await jar.set(details); n++; } catch { /* a cookie that can't be copied is just left behind */ }
+  }
+  if (n) await jar.flushStore().catch(() => {});
+  return n;
+}
+
 function useServer(s) {
   stopAutoRetry();
+  const prev = remembered;
   remembered = saved.save(s);
   server = s;
   sendState({ state: 'connected', server: s });
-  setTimeout(() => {
+  setTimeout(async () => {
+    if (!win || server !== s) return;
+    await carryPairing(prev, s);
     if (!win || server !== s) return;
     win.loadURL(connect.urlFor(s));
     clearInterval(heartbeat);
