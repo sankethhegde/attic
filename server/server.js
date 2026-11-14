@@ -357,6 +357,10 @@ hub.setAgentHook((deviceId, send) => {
   send({ type: 'update', latest: publicRelease(updates.latest()) });
 });
 setInterval(() => transfers.sweep(), 3600e3).unref();
+// 0.14: deleted files wait 30 days in each share's trash, then go for good (checked a minute after start, then daily).
+const purgeTrash = () => files.purgeTrash().then(n => { if (n) console.log(`Emptied ${n} day(s) of trash older than 30 days.`); }, () => {});
+setTimeout(purgeTrash, 60e3).unref();
+setInterval(purgeTrash, 24 * 3600e3).unref();
 transfers.sweep();
 // The receiving end is a device, not an account: its agent calls with the device token alone.
 function requireReceiver(req) {
@@ -615,6 +619,26 @@ async function handleApi(req, res, url, query) {
       const entry = (await files.listFolder(shareId, folder, own.view(who.session))).items.find(e => e.name === saved.name);
       return sendJSON(res, 201, entry);
     }
+  }
+
+  // 0.14: move / rename, and delete (to the share's trash for 30 days). A device may change what it owns;
+  // the master anything. Body: move { path, toShare?, toFolder, name? } → { share, path }; trash { path }.
+  const ch = /^\/api\/shares\/([A-Za-z0-9_-]{1,64})\/(move|trash)$/.exec(url);
+  if (ch && m === 'POST') {
+    const [, shareId, what] = ch;
+    const who = requireSession(req);
+    const view = own.view(who.session);
+    const canChange = (s, r) => who.session.type === 'master' || view.recordOf(s, r).ownerId === who.session.accountId;
+    if (typeof body.path !== 'string' || !body.path) throw new FileError(400, 'INVALID', 'Say which file or folder.');
+    if (what === 'move') {
+      const toShare = typeof body.toShare === 'string' && body.toShare ? body.toShare : shareId;
+      const r = await files.moveItem(shareId, body.path, toShare, typeof body.toFolder === 'string' ? body.toFolder : '', body.name, view, canChange);
+      if (r.moved.length) own.moved(r.moved.map(x => ({ fromShare: shareId, from: x.from, toShare: r.share, to: x.to })));
+      return sendJSON(res, 200, { share: r.share, path: r.path });
+    }
+    const r = await files.trashItem(shareId, body.path, view, canChange);
+    own.dropped(shareId, r.trashed);
+    return sendJSON(res, 200, { ok: true, files: r.trashed.length });
   }
 
   // Every file the caller may see, across all shares: Photos, Videos, Other, the Dashboard and search.

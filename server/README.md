@@ -601,6 +601,22 @@ These routes skip the same-site and pairing gates the rest of the API has, becau
 - loading the newest and a named save;
 - folders, photos, the EXIF preview, and paths outside the share.
 
+## Move, rename and delete (0.14)
+
+For PixHaven's Attic tab and its "Move to Attic" / "Move from Attic" (a move from Attic downloads, checks the size, then deletes here).
+
+| Route | Who | Does |
+| --- | --- | --- |
+| `POST /api/shares/:id/move` | signed in | `{ path, toShare?, toFolder, name? }`: a file or folder into a folder you can see, in this share or another (and/or renamed). → `{ share, path }` where it ended up |
+| `POST /api/shares/:id/trash` | signed in | `{ path }`: a file or folder to the share's trash. → `{ ok, files }` |
+
+- **Only what you may change.** A device may move or delete the files it owns; for a folder, every file inside must be its own (else `403 NOT_YOURS`). The master may change anything. What you can't see is "not found", as everywhere else.
+- **Nothing is overwritten.** A name that is taken becomes "clip (1).mp4" / "Trips (1)". A folder can't go inside itself. Across drives the item is copied, then removed. A file open in another program answers `423 LOCKED`.
+- **Owners follow.** Each moved file keeps its ownership record at its new place (one save for the lot); trashed files lose theirs.
+- **The trash** is a hidden `~attic-trash\<date>\<old place>` folder at the top of each share. It never shows in a listing or the index and can't be read, moved or uploaded into through the API, not even by the master. Days older than 30 are emptied a minute after start and then daily; to get something back sooner, take it out in Explorer.
+
+`move.test.js` covers it against a real server: moving and renaming your own file, free names, other accounts' files, the master moving a folder to another share with owners following, the trash being invisible, a folder holding another account's file, and the 30-day emptying.
+
 ## Reaching the HP over Wi-Fi (8 Nov 2026)
 
 - **The firewall:** installing the service (`service.js`, `installScript`) also adds Windows Firewall rules in the group "Attic Hub": TCP 8080 and 8443, and UDP 41980. They allow the **local subnet only**, on **any profile**, because Windows often calls a home Wi-Fi "Public" and rules for Private alone then do nothing. Removing the service removes them.

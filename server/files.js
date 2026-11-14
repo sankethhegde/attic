@@ -11,6 +11,8 @@ class FileError extends Error {
 const NOT_FOUND = what => new FileError(404, 'NOT_FOUND', `This ${what} doesn’t exist any more.`);
 const INDEX_TTL = 30e3;   // how long one walk of a share is reused
 const INDEX_MAX = 200000; // files per share; past this a real database is due (the brief's SQLite step)
+const TRASH = '~attic-trash';  // 0.14: where deleted files and folders wait, one per share, hidden from everyone
+const TRASH_DAYS = 30;
 
 // Media the browser may show in place (previews, the photo viewer, video playback), by extension, with
 // the type it's served as. Nothing that can run script: no SVG, HTML or PDF. Everything else downloads.
@@ -48,9 +50,12 @@ function createFiles(shares, safePath) {
   }
   const joinRel = (a, b) => a ? a + '/' + b : b;
   const isTemp = n => /^~attic-[0-9a-f]+\.part$/.test(n);
+  // 0.14: deleted items wait in a hidden folder at the top of their share for TRASH_DAYS, then go for good.
+  const isTrash = n => n === TRASH;
+  const isHidden = n => isTemp(n) || isTrash(n);
   function splitName(n) { const i = n.lastIndexOf('.'); return i > 0 ? { base: n.slice(0, i), ext: n.slice(i) } : { base: n, ext: '' }; }
   async function isEmptyDir(p) {
-    try { return (await fs.promises.readdir(p)).filter(n => !isTemp(n)).length === 0; } catch (e) { return false; }
+    try { return (await fs.promises.readdir(p)).filter(n => !isHidden(n)).length === 0; } catch (e) { return false; }
   }
   function readError(e, what) {
     if (e instanceof FileError) return e;
@@ -69,7 +74,7 @@ function createFiles(shares, safePath) {
       let dirents;
       try { dirents = await fs.promises.readdir(rel ? path.join(root, ...rel.split('/')) : root, { withFileTypes: true }); } catch (e) { continue; }
       for (const d of dirents) {
-        if (d.isSymbolicLink() || isTemp(d.name)) continue;
+        if (d.isSymbolicLink() || isHidden(d.name)) continue;
         const childRel = joinRel(rel, d.name);
         if (!safePath(share.id, childRel)) continue;
         if (d.isDirectory()) { stack.push(childRel); continue; }
@@ -98,6 +103,7 @@ function createFiles(shares, safePath) {
       if (!(await fs.promises.stat(real)).isDirectory()) throw NOT_FOUND('folder');
     } catch (e) { throw readError(e, 'folder'); }
     const canon = canonical(root, real);
+    if (canon.split('/').some(isHidden)) throw NOT_FOUND('folder');   // the trash and uploads in flight
     if (!(await view.folderVisible(shareId, canon, () => isEmptyDir(real)))) throw NOT_FOUND('folder');
     return { dir: real, rel: canon };
   }
@@ -117,7 +123,7 @@ function createFiles(shares, safePath) {
       catch (e) { throw readError(e, 'folder'); }
       const items = [];
       await Promise.all(dirents.map(async d => {
-        if (d.isSymbolicLink() || !(d.isFile() || d.isDirectory()) || isTemp(d.name)) return; // links, junctions, devices, uploads in flight
+        if (d.isSymbolicLink() || !(d.isFile() || d.isDirectory()) || isHidden(d.name)) return; // links, junctions, devices, uploads in flight, the trash
         const childRel = joinRel(rel, d.name);
         if (!safePath(shareId, childRel)) return; // a name the API could never address again
         const childPath = path.join(target, d.name);
@@ -138,7 +144,7 @@ function createFiles(shares, safePath) {
     async prepareUpload(shareId, folderRel, name, view) {
       const share = shareOrThrow(shareId);
       if (typeof name !== 'string' || !name || name.includes('/') || name.includes('\\')) throw new FileError(400, 'INVALID', 'Give the file a name.');
-      if (/\.(lnk|tmp|crdownload|part)$/i.test(name) || isTemp(name)) throw new FileError(400, 'INVALID', 'This file type can’t be uploaded.');
+      if (/\.(lnk|tmp|crdownload|part)$/i.test(name) || isHidden(name)) throw new FileError(400, 'INVALID', 'This file type can’t be uploaded.');
       if (!safePath(shareId, joinRel(folderRel, name))) throw new FileError(400, 'INVALID', 'Windows can’t store a file with that name.');
       const { dir, rel } = await folderPath(share, shareId, folderRel, view);
       return { shareId, shareName: share.name, folderRel: rel, dir, name, temp: path.join(dir, `~attic-${crypto.randomBytes(8).toString('hex')}.part`) };
@@ -163,7 +169,7 @@ function createFiles(shares, safePath) {
     async makeFolder(shareId, parentRel, name, view) {
       const share = shareOrThrow(shareId);
       name = typeof name === 'string' ? name.trim() : '';
-      if (!name || name === '.' || name === '..' || /[\\/]/.test(name) || isTemp(name)) throw new FileError(400, 'INVALID', 'Give the folder a name.');
+      if (!name || name === '.' || name === '..' || /[\\/]/.test(name) || isHidden(name)) throw new FileError(400, 'INVALID', 'Give the folder a name.');
       if (!safePath(shareId, joinRel(parentRel, name))) throw new FileError(400, 'INVALID', 'Windows can’t store a folder with that name.');
       const parent = await folderPath(share, shareId, parentRel, view);
       for (let n = 0; n <= 999; n++) {
@@ -239,6 +245,117 @@ function createFiles(shares, safePath) {
     },
     forget(shareId) { if (shareId) indexCache.delete(shareId); else indexCache.clear(); },
 
+    // ---------- 0.14: move, rename and delete (PixHaven's "Move to/from Attic", and moving inside Attic) ----------
+    // Only what the caller may change: canChange(share, rel) is asked for the file, or for every file inside a
+    // folder (a device may change what it owns; the master anything). Nothing is ever overwritten.
+
+    // A file or folder (not the share itself) the caller can see, as the disk spells it.
+    async _item(shareId, rel, view) {
+      const share = shareOrThrow(shareId);
+      const target = safePath(shareId, rel);
+      if (!target || target === safePath(shareId, '')) throw NOT_FOUND('item');
+      const root = await realRoot(share);
+      let real, st;
+      try { real = await confirmInside(root, target); st = await fs.promises.lstat(real); }
+      catch (e) { throw readError(e, 'item'); }
+      const canon = canonical(root, real);
+      if (canon.split('/').some(isHidden)) throw NOT_FOUND('item');
+      const isDir = st.isDirectory();
+      if (isDir ? !(await view.folderVisible(shareId, canon, () => isEmptyDir(real))) : !view.fileVisible(shareId, canon)) throw NOT_FOUND(isDir ? 'folder' : 'file');
+      return { share, root, real, rel: canon, isDir };
+    },
+    // Every file inside a folder (relative to the share), for the ownership checks and records.
+    async _filesUnder(root, real) {
+      const out = [], stack = [real];
+      while (stack.length) {
+        const dir = stack.pop();
+        for (const d of await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+          if (d.isSymbolicLink() || isTemp(d.name)) continue;
+          const p = path.join(dir, d.name);
+          if (d.isDirectory()) stack.push(p); else if (d.isFile()) out.push(canonical(root, p));
+        }
+      }
+      return out;
+    },
+    _mayChange(it, files, canChange) {
+      const list = it.isDir ? files : [it.rel];
+      if (list.some(r => !canChange(it.share.id, r))) {
+        throw new FileError(403, 'NOT_YOURS', it.isDir ? 'Some files in this folder belong to someone else, so it can’t be changed from here.' : 'This file belongs to someone else, so it can’t be changed from here.');
+      }
+    },
+    // Renames src into destDir under a free name ("clip (1).mp4"); across drives, copies then removes.
+    async _placeAt(srcReal, destDir, name, isDir) {
+      const { base, ext } = isDir ? { base: name, ext: '' } : splitName(name);
+      for (let n = 0; n <= 999; n++) {
+        const cand = n ? `${base} (${n})${ext}` : name;
+        const to = path.join(destDir, cand);
+        if (await fs.promises.lstat(to).then(() => true, () => false)) continue;   // taken: never overwrite
+        try { await fs.promises.rename(srcReal, to); return cand; }
+        catch (e) {
+          if (e.code === 'EXDEV') {
+            await fs.promises.cp(srcReal, to, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true });
+            await fs.promises.rm(srcReal, { recursive: true, force: true });
+            return cand;
+          }
+          if (e.code === 'EPERM' || e.code === 'EBUSY' || e.code === 'EACCES') throw new FileError(423, 'LOCKED', 'Windows won’t let Attic move this. A file in it may be open in another program.');
+          if (e.code === 'ENOSPC') throw new FileError(507, 'DISK_FULL', 'The drive is full.');
+          throw e;
+        }
+      }
+      throw new FileError(409, 'CONFLICT', 'Couldn’t find a free name.');
+    },
+
+    // Moves (and/or renames) a file or folder into a folder the caller can see, in this share or another one.
+    // Answers where it ended up and every file's old and new place, so ownership records can follow.
+    async moveItem(shareId, rel, toShareId, toFolderRel, newName, view, canChange) {
+      const it = await this._item(shareId, rel, view);
+      const files = it.isDir ? await this._filesUnder(it.root, it.real) : [];
+      this._mayChange(it, files, canChange);
+      const name = typeof newName === 'string' && newName.trim() ? newName.trim() : path.basename(it.real);
+      if (/[\\/]/.test(name) || name === '.' || name === '..' || isHidden(name)) throw new FileError(400, 'INVALID', 'Give it a name.');
+      const toShare = shareOrThrow(toShareId || shareId);
+      const dest = await folderPath(toShare, toShare.id, toFolderRel || '', view);
+      if (!safePath(toShare.id, joinRel(dest.rel, name))) throw new FileError(400, 'INVALID', 'Windows can’t store that name.');
+      if (it.isDir && (dest.dir === it.real || dest.dir.startsWith(it.real + path.sep))) throw new FileError(400, 'INVALID', 'A folder can’t go inside itself.');
+      if (path.dirname(it.real) === dest.dir && name === path.basename(it.real)) return { share: toShare.id, path: it.rel, moved: [] };
+      const placed = await this._placeAt(it.real, dest.dir, name, it.isDir);
+      const toRel = joinRel(dest.rel, placed);
+      const moved = it.isDir ? files.map(f => ({ from: f, to: toRel + f.slice(it.rel.length) })) : [{ from: it.rel, to: toRel }];
+      this.forget(shareId); this.forget(toShare.id);
+      return { share: toShare.id, path: toRel, isDir: it.isDir, moved };
+    },
+
+    // "Delete": the item goes to the share's hidden trash, under today's date and its old place, and is
+    // removed for good after TRASH_DAYS (purgeTrash). Answers the files that went, for their records.
+    async trashItem(shareId, rel, view, canChange) {
+      const it = await this._item(shareId, rel, view);
+      const files = it.isDir ? await this._filesUnder(it.root, it.real) : [it.rel];
+      this._mayChange(it, files, canChange);
+      const day = new Date().toISOString().slice(0, 10);
+      const parentRel = it.rel.includes('/') ? it.rel.slice(0, it.rel.lastIndexOf('/')) : '';
+      const destDir = path.join(it.root, TRASH, day, ...(parentRel ? parentRel.split('/') : []));
+      await fs.promises.mkdir(destDir, { recursive: true });
+      await this._placeAt(it.real, destDir, path.basename(it.real), it.isDir);
+      this.forget(shareId);
+      return { trashed: files };
+    },
+
+    // Empties trash older than TRASH_DAYS in every share. Answers how many dated folders went.
+    async purgeTrash(now = Date.now(), days = TRASH_DAYS) {
+      let gone = 0;
+      for (const share of shares) {
+        let root;
+        try { root = await fs.promises.realpath(share.rootPath); } catch (e) { continue; }
+        const trash = path.join(root, TRASH);
+        for (const d of await fs.promises.readdir(trash, { withFileTypes: true }).catch(() => [])) {
+          const at = Date.parse(d.name);
+          if (!d.isDirectory() || !/^\d{4}-\d{2}-\d{2}$/.test(d.name) || !(at < now - days * 864e5)) continue;
+          await fs.promises.rm(path.join(trash, d.name), { recursive: true, force: true }).then(() => gone++, () => {});
+        }
+      }
+      return gone;
+    },
+
     // Size of each file that still exists, for revoke and restore figures. Missing ones are skipped.
     async sizes(keys) {
       let count = 0, bytes = 0;
@@ -259,7 +376,8 @@ function createFiles(shares, safePath) {
       const root = await realRoot(share);
       try {
         const real = await confirmInside(root, target);
-        if (!view.fileVisible(shareId, canonical(root, real))) throw NOT_FOUND('file');
+        const canon = canonical(root, real);
+        if (canon.split('/').some(isHidden) || !view.fileVisible(shareId, canon)) throw NOT_FOUND('file');
         const handle = await fs.promises.open(real, 'r');
         const st = await handle.stat();
         if (!st.isFile()) { await handle.close(); throw NOT_FOUND('file'); }

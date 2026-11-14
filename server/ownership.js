@@ -66,6 +66,24 @@ function createOwnership(dataDir) {
       save(normalise(next));
     },
 
+    // 0.14: files moved or renamed keep their owner ({ fromShare, from, toShare, to } each); trashed ones lose
+    // their record (the trash is out of everyone's view). One save for the lot.
+    moved(list) {
+      const next = Object.assign({}, records);
+      for (const m of list) {
+        const k = key(m.fromShare, m.from);
+        if (!next[k]) continue;
+        next[key(m.toShare, m.to)] = next[k];
+        delete next[k];
+      }
+      save(normalise(next));
+    },
+    dropped(share, rels) {
+      const next = Object.assign({}, records);
+      for (const r of rels) delete next[key(share, r)];
+      save(normalise(next));
+    },
+
     // Revoke: everything the account owns goes to the custodian. uploadedBy is untouched, so restore can return it.
     revoke(id, custodianId) { return this._change(r => r.ownerId === id ? { ownerId: custodianId, uploadedBy: r.uploadedBy } : null); },
     // Restore: what the account uploaded and someone else holds comes back.
